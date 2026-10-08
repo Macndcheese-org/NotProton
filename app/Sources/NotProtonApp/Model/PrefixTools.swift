@@ -112,9 +112,9 @@ enum PrefixTools {
         environment.removeValue(forKey: "WINEDLLPATH")
         environment["WINEPREFIX"] = prefix.pfx.path(percentEncoded: false)
         environment["WINEMSYNC"] = syncBackend(prefix: prefix)
-        environment["DYLD_FALLBACK_LIBRARY_PATH"] = (RuntimeLibraries.searchDirs.map {
-            $0.path(percentEncoded: false)
-        } + ["/usr/lib"]).joined(separator: ":")
+        let libraries = [runner.appending(path: "dlls/winemac.drv")] + RuntimeLibraries.searchDirs
+        environment["DYLD_FALLBACK_LIBRARY_PATH"] = (libraries.map { $0.path(percentEncoded: false) }
+            + ["/usr/lib"]).joined(separator: ":")
         let fonts = "/usr/local/opt/fontconfig/etc/fonts"
         if FileManager.default.fileExists(atPath: fonts) { environment["FONTCONFIG_PATH"] = fonts }
         return environment

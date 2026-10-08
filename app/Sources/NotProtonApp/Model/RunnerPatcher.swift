@@ -30,8 +30,9 @@ enum RunnerPatcher {
         var ntdll: [WineArch] = []
         var builtins: [String] = []
         var loaders: [String] = []
+        var disabled: [String] = []
 
-        var wroteNothing: Bool { ntdll.isEmpty && builtins.isEmpty && loaders.isEmpty }
+        var wroteNothing: Bool { ntdll.isEmpty && builtins.isEmpty && loaders.isEmpty && disabled.isEmpty }
     }
 
     static func install(
@@ -41,7 +42,30 @@ enum RunnerPatcher {
         outcome.ntdll = try installNtdll(build: build, root: root, bridge: bridge)
         outcome.builtins = try installBuiltins(root: root, bridge: bridge)
         outcome.loaders = try grantLoaderEntitlement(root: root)
+        outcome.disabled = try disableShadowingBuiltins(root: root)
         return outcome
+    }
+
+    // The loader rewrites a d3d module name (d3d12.dll -> d3d12_d3dm.dll) and then looks the
+    // builtin up by the original name, so a Wine builtin of that name wins and the D3DMetal
+    // stub never loads. The release ships dxgi, d3d11 and d3d10core already moved aside; d3d12
+    // is left in, which turns every D3D12 game on D3DMetal into Wine's vkd3d with no Vulkan
+    // behind it. x86_64 only: the stubs are 64-bit, and 32-bit processes keep the builtins.
+    static let shadowingBuiltins = ["dxgi.dll", "d3d11.dll", "d3d10core.dll", "d3d12.dll"]
+    static let disabledSuffix = "builtin-disabled"
+
+    static func disableShadowingBuiltins(root: URL) throws -> [String] {
+        let fm = FileManager.default
+        var moved: [String] = []
+        for name in shadowingBuiltins {
+            let builtin = RunnerLayout.peBuiltin(in: root, arch: WineArch.x86_64Windows.rawValue, name: name)
+            guard fm.fileExists(atPath: builtin.path(percentEncoded: false)) else { continue }
+            let aside = builtin.appendingPathExtension(disabledSuffix)
+            try? fm.removeItem(at: aside)
+            try WriteRefused.catching(builtin.path(percentEncoded: false)) { try fm.moveItem(at: builtin, to: aside) }
+            moved.append(name)
+        }
+        return moved
     }
 
     static func verify(
@@ -71,6 +95,13 @@ enum RunnerPatcher {
                 bridge.appending(path: "\(builtin.arch)/\(builtin.name)"))
             if let staged, staged != installed {
                 wrong.append("\(builtin.arch)/\(builtin.name) is out of date")
+            }
+        }
+
+        for name in shadowingBuiltins {
+            let builtin = RunnerLayout.peBuiltin(in: root, arch: WineArch.x86_64Windows.rawValue, name: name)
+            if FileManager.default.fileExists(atPath: builtin.path(percentEncoded: false)) {
+                wrong.append("x86_64-windows/\(name) still shadows the D3DMetal stub")
             }
         }
 

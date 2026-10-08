@@ -154,4 +154,31 @@ struct RunnerPatcherTests {
         #expect(RunnerLayout.builtin(in: root, arch: "i386-windows", name: "lsteamclient.dll")
             == root.appending(path: "dlls/lsteamclient/i386-windows/lsteamclient.dll"))
     }
+
+    @Test("Wine's x86_64 d3d builtins are moved aside so the D3DMetal stubs load, and only those")
+    func disablesShadowingBuiltins() throws {
+        let fm = FileManager.default
+        let root = URL(filePath: NSTemporaryDirectory()).appending(path: "notproton-shadow-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        func write(_ arch: String, _ name: String) throws {
+            let file = RunnerLayout.peBuiltin(in: root, arch: arch, name: name)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(name.utf8).write(to: file)
+        }
+        try write("x86_64-windows", "d3d12.dll")
+        try write("i386-windows", "d3d12.dll")
+        try write("x86_64-windows", "d3d10.dll")
+
+        #expect(try RunnerPatcher.disableShadowingBuiltins(root: root) == ["d3d12.dll"])
+        #expect(try RunnerPatcher.disableShadowingBuiltins(root: root).isEmpty)
+
+        let x64 = RunnerLayout.peBuiltin(in: root, arch: "x86_64-windows", name: "d3d12.dll")
+        #expect(!fm.fileExists(atPath: x64.path(percentEncoded: false)))
+        #expect(fm.fileExists(atPath: x64.appendingPathExtension("builtin-disabled").path(percentEncoded: false)))
+        // The 32-bit builtin and Wine's d3d10 API layer stay where they are.
+        #expect(fm.fileExists(atPath: RunnerLayout.peBuiltin(in: root, arch: "i386-windows", name: "d3d12.dll")
+            .path(percentEncoded: false)))
+        #expect(fm.fileExists(atPath: RunnerLayout.peBuiltin(in: root, arch: "x86_64-windows", name: "d3d10.dll")
+            .path(percentEncoded: false)))
+    }
 }

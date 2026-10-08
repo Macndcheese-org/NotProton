@@ -56,7 +56,9 @@ export WINEDLLPATH="${WINEDLLPATH:-}"
 # MnC Wine loads FreeType, fontconfig and GnuTLS at runtime, and needs x86_64 copies.
 # Intel Homebrew has them under /usr/local, and MacNdCheese keeps its own closure in deps.
 mnc_deps="$HOME/Library/Application Support/MacNCheese/deps"
-mnc_dyld=""
+# winemetal.so links @rpath/winemac.so, which a build tree keeps in its own module folder,
+# so DXMT only finds it there when a game creates its device before any window.
+mnc_dyld="$MNC_ROOT/dlls/winemac.drv"
 for dir in /usr/local/opt/freetype/lib /usr/local/opt/fontconfig/lib \
   /usr/local/opt/gnutls/lib /usr/local/opt/sdl2/lib /usr/local/opt/glib/lib \
   /usr/local/opt/gettext/lib /usr/local/opt/gstreamer/lib /usr/local/lib \
