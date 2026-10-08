@@ -41,7 +41,10 @@ enum RunnerStore {
 
     static func clonedBuilds(in runners: URL = SupportPaths.runners) -> [String] {
         let fm = FileManager.default
-        let entries = (try? fm.contentsOfDirectory(at: runners, includingPropertiesForKeys: nil)) ?? []
+        // The URL listing will not open a folder through a link, and runners/ can be one that
+        // keeps the trees on another drive.
+        let entries = (try? fm.contentsOfDirectory(
+            at: runners.resolvingSymlinksInPath(), includingPropertiesForKeys: nil)) ?? []
         return entries
             .map(\.lastPathComponent)
             .filter { $0.hasPrefix(SupportPaths.runnerPrefix) }

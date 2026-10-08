@@ -99,7 +99,8 @@ enum RunnerInstaller {
 
     static func removeLeftoverRemovals(runners: URL) {
         let fm = FileManager.default
-        let entries = (try? fm.contentsOfDirectory(at: runners, includingPropertiesForKeys: nil)) ?? []
+        let entries = (try? fm.contentsOfDirectory(
+            at: runners.resolvingSymlinksInPath(), includingPropertiesForKeys: nil)) ?? []
         for entry in entries where entry.lastPathComponent.hasPrefix(".\(SupportPaths.runnerPrefix)")
             && entry.lastPathComponent.hasSuffix(".removing") {
             try? fm.removeItem(at: entry)

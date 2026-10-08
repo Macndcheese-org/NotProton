@@ -95,4 +95,17 @@ struct RunnerStateTests {
 
         #expect(RunnerStore.clonedBuilds(in: fixture.runners) == ["11.0-00000000", "11.18-c8fd07a0"])
     }
+
+    @Test("A runners folder that links to another drive is listed through the link")
+    func listsThroughLink() throws {
+        let fixture = try Fixture()
+        let external = fixture.runners.appending(path: "external")
+        let version = SupportedRunners.all[0].id
+        try markClone(SupportPaths.clonedRoot(forBuild: version, runners: external))
+        let linked = fixture.runners.appending(path: "linked")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: external)
+
+        #expect(RunnerStore.clonedBuilds(in: linked) == [version])
+        #expect(RunnerStore.installedBuilds(in: linked).map(\.id) == [version])
+    }
 }
