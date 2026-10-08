@@ -462,6 +462,25 @@ struct RunnerRemovalTests {
         #expect(RunnerInstaller.isRunning(from: URL(filePath: "/R/x"), ps: "/nonexistent/ps"))
     }
 
+    @Test("A runner reached through a link is running when Wine runs from its real path")
+    func readsRunningExecutablesThroughLink() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appending(path: "np-ps-link-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: dir) }
+        let real = dir.appending(path: "external/runners/mnc-11.18-aaaaaaaa")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: dir.appending(path: "runners"), withDestinationURL: real.deletingLastPathComponent())
+        let ps = dir.appending(path: "ps")
+        try """
+            #!/bin/sh
+            echo "\(real.resolvingSymlinksInPath().path(percentEncoded: false))/wine/server/wineserver"
+            """.write(to: ps, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ps.path(percentEncoded: false))
+
+        let linked = dir.appending(path: "runners/mnc-11.18-aaaaaaaa")
+        #expect(RunnerInstaller.isRunning(from: linked, ps: ps.path(percentEncoded: false)))
+    }
+
     @Test("Any build can be removed, and its tools and staged copies go with it")
     func removesBuild() throws {
         let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])

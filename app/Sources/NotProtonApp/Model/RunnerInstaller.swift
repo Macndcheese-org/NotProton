@@ -229,10 +229,15 @@ enum RunnerInstaller {
     static func isRunning(from clone: URL, ps: String = "/bin/ps") -> Bool {
         guard let result = try? Shell.run(ps, ["-axww", "-o", "comm="]), result.succeeded
         else { return true }
-        let root = clone.standardizedFileURL.path(percentEncoded: false)
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        return result.stdout.split(separator: "\n").contains {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix(prefix)
+        // Wine starts its server from the real path of the tree, so a runners folder that is a
+        // link (to another drive, say) has to be matched on both spellings.
+        let roots = Set([clone.standardizedFileURL, clone.resolvingSymlinksInPath()].map {
+            let root = $0.path(percentEncoded: false)
+            return root.hasSuffix("/") ? root : root + "/"
+        })
+        return result.stdout.split(separator: "\n").contains { line in
+            let command = line.trimmingCharacters(in: .whitespaces)
+            return roots.contains { command.hasPrefix($0) }
         }
     }
 
