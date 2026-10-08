@@ -45,6 +45,7 @@ struct SteamBundleTests {
         case own
         case ownWithoutControllerBlock
         case other(String)
+        case ownBeside(String)
     }
 
     private func deployment(
@@ -81,6 +82,12 @@ struct SteamBundleTests {
             ]
         case .other(let value):
             plist[SteamBundle.environmentKey] = [SteamBundle.insertKey: value]
+        case .ownBeside(let other):
+            let own = SupportPaths.Steam.deployedDylib(inBundle: app)
+            plist[SteamBundle.environmentKey] = [
+                SteamBundle.insertKey: "\(other):\(own.path(percentEncoded: false))",
+                SteamBundle.controllerBlockKey: SteamBundle.controllerBlockValue,
+            ]
         }
         try PropertyListSerialization
             .data(fromPropertyList: plist, format: .xml, options: 0)
@@ -122,12 +129,35 @@ struct SteamBundleTests {
         )
     }
 
-    @Test("Somebody else's insert is left alone")
-    func foreignInsert() throws {
+    // Another tool's library alone in the insert means NotProton has yet to be added beside it,
+    // which is what happens when that tool rewrites the list without NotProton.
+    @Test("Somebody else's insert alone reads as not installed")
+    func otherInsertAlone() throws {
         #expect(
             try deployment(insert: .other("/opt/other/thing.dylib"), dylib: true, version: nil)
-                == .foreign(insert: "/opt/other/thing.dylib")
+                == .notInstalled
         )
+    }
+
+    @Test("NotProton beside somebody else's library reads as installed")
+    func ownBesideOther() throws {
+        #expect(
+            try deployment(insert: .ownBeside("/opt/other/thing.dylib"), dylib: true, version: "0.2.0")
+                == .installed(version: "0.2.0")
+        )
+    }
+
+    @Test("Adding keeps other libraries first and NotProton once, and removing takes only NotProton")
+    func insertListEdits() {
+        let own = "/Applications/Steam.app/Contents/MacOS/notproton.dylib"
+        #expect(SteamBundle.insert(adding: own, to: nil) == own)
+        #expect(SteamBundle.insert(adding: own, to: "/a.dylib") == "/a.dylib:\(own)")
+        #expect(SteamBundle.insert(adding: own, to: "\(own):/a.dylib") == "/a.dylib:\(own)")
+        #expect(SteamBundle.insert(adding: own, to: "/old/notproton.dylib::/a.dylib") == "/a.dylib:\(own)")
+
+        #expect(SteamBundle.insertRemovingOwn("/a.dylib:\(own):/b.dylib") == "/a.dylib:/b.dylib")
+        #expect(SteamBundle.insertRemovingOwn(own) == nil)
+        #expect(SteamBundle.insertRemovingOwn("/x/notnotproton.dylib") == "/x/notnotproton.dylib")
     }
 
     @Test("An unpatched bundle reads as not installed")

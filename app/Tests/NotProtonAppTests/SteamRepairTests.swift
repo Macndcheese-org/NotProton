@@ -168,6 +168,31 @@ struct SteamRepairTests {
         #expect(try SteamRepair.clearInsert(at: plist) == false)
     }
 
+    @Test("Clearing takes only NotProton out of an insert it shares with another tool")
+    func clearKeepsOtherLibraries() throws {
+        let work = try scratchDirectory("repair")
+        defer { try? FileManager.default.removeItem(at: work) }
+
+        let plist = work.appending(path: "Info.plist")
+        let other = "/Applications/Steam.app/Contents/MacOS/other.dylib"
+        try SteamBundle.writeInfoPlist([
+            SteamBundle.environmentKey: [
+                SteamBundle.insertKey: "\(other):/Applications/Steam.app/Contents/MacOS/notproton.dylib",
+                SteamBundle.controllerBlockKey: SteamBundle.controllerBlockValue,
+            ],
+        ], at: plist)
+
+        #expect(try SteamRepair.clearInsert(at: plist))
+        let environment = try #require(SteamBundle.readInfoPlist(at: plist)?[SteamBundle.environmentKey] as? [String: Any])
+        #expect(environment[SteamBundle.insertKey] as? String == other)
+        #expect(environment[SteamBundle.controllerBlockKey] == nil)
+
+        // Another tool's insert alone is not NotProton's to clear.
+        #expect(try SteamRepair.clearInsert(at: plist) == false)
+        let again = try #require(SteamBundle.readInfoPlist(at: plist)?[SteamBundle.environmentKey] as? [String: Any])
+        #expect(again[SteamBundle.insertKey] as? String == other)
+    }
+
     @Test("Clearing the insert reports nothing done when there is no plist or no insert")
     func clearInsertIsQuietWhenThereIsNothingToDo() throws {
         let work = try scratchDirectory("repair")

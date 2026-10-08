@@ -18,6 +18,8 @@ struct StatusSnapshot: Sendable {
     var steamRunning: Bool
     var updateBlocked: Bool
     var archives: [WineArchive]
+    // Other tools' libraries that share Steam's insert with NotProton.
+    var otherInserts: [String] = []
     var missingLibraries: [RuntimeLibraries.Library] = []
     var runner: RunnerState
     var payload: PayloadState
@@ -37,6 +39,7 @@ struct StatusSnapshot: Sendable {
             steamRunning: SteamBundle.isRunning,
             updateBlocked: UpdateBlock.isPresent(),
             archives: archives,
+            otherInserts: SteamBundle.otherInserts(),
             missingLibraries: RuntimeLibraries.missing(),
             runner: runner,
             payload: PayloadInspector.inspect(builds: installed),

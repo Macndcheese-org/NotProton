@@ -291,8 +291,15 @@ spawn-live: $(TARGET)
 		if [ "$$got" != "$$want" ]; then \
 			echo "$$drv -> $$kid: insert present $$got, wanted $$want"; fail=1; fi; \
 	done; \
+	printf 'void np_spawn_live_other(void) {}\n' > $$tmp/other.c; \
+	$(CC) -arch $(ARCH) -mmacosx-version-min=$(MIN_VER) -dynamiclib \
+	  -o $$tmp/other.dylib $$tmp/other.c || exit 1; \
+	got=$$(DYLD_INSERT_LIBRARIES=$$tmp/other.dylib:$$PWD/$(TARGET) $$tmp/steam_osx $$tmp/child 2>/dev/null \
+	       | grep "^DYLD_INSERT_LIBRARIES=") || true; \
+	if [ "$$got" != "DYLD_INSERT_LIBRARIES=$$tmp/other.dylib" ]; then \
+		echo "shared insert: child got [$$got], wanted only the other library"; fail=1; fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "==> spawn live: the hook lands, steam_osx keeps the insert, other children do not"
+	echo "==> spawn live: the hook lands, steam_osx keeps the insert, other children keep only other tools' libraries"
 
 APP_TESTS := app/Tests
 

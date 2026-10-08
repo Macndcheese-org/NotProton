@@ -72,7 +72,6 @@ enum AppLog {
         case .notInstalled: "not installed"
         case .installed(let version): "installed \(version ?? "version unknown")"
         case .outdated(let deployed, let bundled): "outdated deployed=\(deployed) bundled=\(bundled)"
-        case .foreign(let insert): "foreign insert \(insert)"
         }
     }
 

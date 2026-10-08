@@ -298,6 +298,7 @@ struct StatusView: View {
 
             Section("Steam") {
                 steamRow(snapshot.steam, payload: snapshot.payload)
+                sharedInsertRow(snapshot.otherInserts, steam: snapshot.steam)
                 if snapshot.steamRunning {
                     StatusRow(
                         title: "Steam is running",
@@ -466,12 +467,22 @@ struct StatusView: View {
                 tone: .warning,
                 action: installAction(prominent: true)
             )
-        case .foreign:
+        }
+    }
+
+    // Another tool's library in Steam's insert, which NotProton loads beside.
+    @ViewBuilder
+    private func sharedInsertRow(_ others: [String], steam: SteamDeployment) -> some View {
+        if !others.isEmpty {
+            let names = others.map { URL(filePath: $0).lastPathComponent }.joined(separator: ", ")
             StatusRow(
-                title: "NotProton",
-                value: "Another dylib is present.",
-                tone: .warning,
-                detail: "Repair your Steam install before installing NotProton."
+                title: "Shared with",
+                value: names,
+                tone: .info,
+                detail: steam == .notInstalled
+                    ? "NotProton is added beside it when you install."
+                    : "NotProton loads beside it. If that tool rewrites Steam's settings without "
+                        + "NotProton, install again."
             )
         }
     }

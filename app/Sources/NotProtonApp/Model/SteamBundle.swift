@@ -7,8 +7,6 @@ enum SteamDeployment: Sendable, Equatable {
     case notInstalled
     case installed(version: String?)
     case outdated(deployed: String, bundled: String)
-    // If the user has something else installed, maybe let's not deploy?
-    case foreign(insert: String)
 }
 
 // Reading and writing the injection
@@ -20,6 +18,31 @@ enum SteamBundle {
 
     static let plistBackupName = "Info.plist.before-notproton"
     static let environmentKey = "LSEnvironment"
+
+    // Steam's insert is a colon-separated list, which another tool can share with NotProton.
+    static func insertEntries(_ insert: String?) -> [String] {
+        (insert ?? "").split(separator: ":").map(String.init).filter { !$0.isEmpty }
+    }
+
+    // NotProton's own entry, by file name wherever it was deployed.
+    static func isOwnInsert(_ path: String) -> Bool {
+        URL(filePath: path).lastPathComponent == SupportPaths.dylibName
+    }
+
+    // NotProton goes last, so a library that was there first keeps loading first.
+    static func insert(adding dylib: String, to insert: String?) -> String {
+        (insertEntries(insert).filter { !isOwnInsert($0) } + [dylib]).joined(separator: ":")
+    }
+
+    // nil when NotProton was all there was.
+    static func insertRemovingOwn(_ insert: String?) -> String? {
+        let rest = insertEntries(insert).filter { !isOwnInsert($0) }
+        return rest.isEmpty ? nil : rest.joined(separator: ":")
+    }
+
+    static func otherInserts(at url: URL = SupportPaths.Steam.infoPlist) -> [String] {
+        insertEntries(currentInsert(at: url)).filter { !isOwnInsert($0) }
+    }
 
     static var isPresent: Bool {
         FileManager.default.fileExists(atPath: SupportPaths.Steam.app.path(percentEncoded: false))
@@ -43,8 +66,8 @@ enum SteamBundle {
 
         let deployedDylib = SupportPaths.Steam.deployedDylib(inBundle: app)
             .path(percentEncoded: false)
-        let components = insert.split(separator: ":").map(String.init)
-        guard components.contains(deployedDylib) else { return .foreign(insert: insert) }
+        // Another tool's library in the list is no reason not to deploy beside it.
+        guard insertEntries(insert).contains(deployedDylib) else { return .notInstalled }
 
         guard files.fileExists(atPath: deployedDylib) else { return .notInstalled }
 

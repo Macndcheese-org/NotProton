@@ -1,4 +1,4 @@
-// Strips DYLD_INSERT_LIBRARIES and the SDL block list from child processes
+// Strips NotProton's own DYLD_INSERT_LIBRARIES entry and the SDL block list from child processes
 #include "hooks.h"
 #include "../util/log.h"
 
@@ -22,8 +22,10 @@ static fn_posix_spawn orig_posix_spawnp;
 
 // The SDL block list stops Steam from seeing a second, generic copy of the Steam Controller.
 // This solves double input issues.
+static const char np_insert_key[] = "DYLD_INSERT_LIBRARIES=";
+
 static const char *const np_steam_only_keys[] = {
-    "DYLD_INSERT_LIBRARIES=",
+    np_insert_key,
     "SDL_JOYSTICK_BLACKLIST_DEVICES=",
 };
 
@@ -46,30 +48,85 @@ static int np_target_keeps_insert(const char *path) {
         || strcmp(base, "Steam Helper") == 0;
 }
 
+// NotProton's own entry in the insert list, matched by file name wherever it was deployed.
+static int np_is_own_insert(const char *path, size_t len) {
+    static const char own[] = "notproton.dylib";
+    size_t n = sizeof(own) - 1;
+    return len >= n && memcmp(path + len - n, own, n) == 0
+        && (len == n || path[len - n - 1] == '/');
+}
+
+// Another tool can share Steam's insert with NotProton. Its libraries stay in the list for
+// every child, and only NotProton's own entry is dropped. Writes the remaining list to `out`
+// when it is not NULL, and returns its length, 0 when nothing is left.
+static size_t np_others_in_insert(const char *list, char *out) {
+    size_t used = 0;
+    for (const char *p = list; ; ) {
+        const char *end = strchr(p, ':');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len && !np_is_own_insert(p, len)) {
+            if (out) {
+                if (used)
+                    out[used] = ':';
+                memcpy(out + used + (used ? 1 : 0), p, len);
+            }
+            used += len + (used ? 1 : 0);
+        }
+        if (!end)
+            break;
+        p = end + 1;
+    }
+    if (out)
+        out[used] = '\0';
+    return used;
+}
+
+static int np_is_insert(const char *entry) {
+    return strncmp(entry, np_insert_key, sizeof(np_insert_key) - 1) == 0;
+}
+
+// The array and any rewritten insert share one allocation, so freeing the array frees both.
 static char **np_without_insert(char *const envp[]) {
     if (!envp)
         return NULL;
 
     int count = 0;
     int found = 0;
+    size_t extra = 0;
     for (int i = 0; envp[i]; i++) {
         if (np_is_steam_only(envp[i]))
             found = 1;
+        if (np_is_insert(envp[i])) {
+            size_t others = np_others_in_insert(envp[i] + sizeof(np_insert_key) - 1, NULL);
+            if (others)
+                extra += sizeof(np_insert_key) - 1 + others + 1;
+        }
         count++;
     }
     if (!found)
         return NULL;
 
-    char **clean = malloc(sizeof(char *) * (size_t)(count + 1));
+    size_t table = sizeof(char *) * (size_t)(count + 1);
+    char **clean = malloc(table + extra);
     if (!clean) {
         NP_WARN("[spawn] cannot allocate a stripped environment, insert passed through");
         return NULL;
     }
 
+    char *store = (char *)clean + table;
     int j = 0;
     for (int i = 0; envp[i]; i++) {
-        if (!np_is_steam_only(envp[i]))
+        if (np_is_insert(envp[i])) {
+            const char *list = envp[i] + sizeof(np_insert_key) - 1;
+            if (!np_others_in_insert(list, NULL))
+                continue;
+            memcpy(store, np_insert_key, sizeof(np_insert_key) - 1);
+            size_t others = np_others_in_insert(list, store + sizeof(np_insert_key) - 1);
+            clean[j++] = store;
+            store += sizeof(np_insert_key) - 1 + others + 1;
+        } else if (!np_is_steam_only(envp[i])) {
             clean[j++] = envp[i];
+        }
     }
     clean[j] = NULL;
     return clean;

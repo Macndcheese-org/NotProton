@@ -191,9 +191,17 @@ enum SteamRepair {
               var environment = dict[SteamBundle.environmentKey] as? [String: Any]
         else { return false }
 
-        let removed = [SteamBundle.insertKey, SteamBundle.controllerBlockKey]
-            .compactMap { environment.removeValue(forKey: $0) }
-        guard !removed.isEmpty else { return false }
+        // Only NotProton's entry leaves the insert. Another tool's libraries stay.
+        var changed = false
+        if let insert = environment[SteamBundle.insertKey] as? String {
+            let rest = SteamBundle.insertRemovingOwn(insert)
+            if rest != insert {
+                environment[SteamBundle.insertKey] = rest
+                changed = true
+            }
+        }
+        if environment.removeValue(forKey: SteamBundle.controllerBlockKey) != nil { changed = true }
+        guard changed else { return false }
         dict[SteamBundle.environmentKey] = environment
         try SteamBundle.writeInfoPlist(dict, at: plist)
         return true

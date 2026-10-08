@@ -6,16 +6,17 @@ import Testing
 @Suite("Runner patching")
 struct RunnerPatcherTests {
 
-    // Only real CrossOver bytes can answer whether a repair works, since no tree a test builds
-    // meets the pinned hashes. An APFS clone costs a second and leaves the real one alone.
+    // Only real MnC Wine bytes can answer whether a repair works, since no tree a test builds
+    // meets the pinned hashes. An APFS clone costs a second and leaves the real one alone, so
+    // it is made beside the real tree, on whatever drive runners/ points at.
     private static func healthyClone() throws -> (root: URL, build: RunnerBuild)? {
         guard let build = RunnerStore.installedBuilds().first(where: {
             RunnerPatcher.verify(build: $0, root: SupportPaths.clonedRoot(forBuild: $0.id)).isEmpty
         }) else { return nil }
-        let live = SupportPaths.clonedRoot(forBuild: build.id)
+        let live = SupportPaths.clonedRoot(forBuild: build.id).resolvingSymlinksInPath()
 
-        let scratch = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "notproton-runner-\(UUID().uuidString)")
+        let scratch = live.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".notproton-test-runner-\(UUID().uuidString)")
         let copied = try Shell.run("/bin/cp", [
             "-c", "-R", live.path(percentEncoded: false), scratch.path(percentEncoded: false),
         ])
@@ -36,7 +37,7 @@ struct RunnerPatcherTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let arch = RunnerPatcher.unixArch(in: root)
-        let builtin = root.appending(path: "lib/wine/\(arch)/lsteamclient.so")
+        let builtin = RunnerLayout.builtin(in: root, arch: arch, name: "lsteamclient.so")
         try Data("not the bridge copy".utf8).write(to: builtin)
 
         #expect(RunnerPatcher.verify(build: build, root: root)
@@ -52,7 +53,7 @@ struct RunnerPatcherTests {
         guard let (root, build) = try Self.healthyClone() else { return }
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let builtin = root.appending(path: "lib/wine/i386-windows/lsteamclient.dll")
+        let builtin = RunnerLayout.peBuiltin(in: root, arch: "i386-windows", name: "lsteamclient.dll")
         try FileManager.default.removeItem(at: builtin)
 
         #expect(RunnerPatcher.verify(build: build, root: root)
@@ -70,7 +71,7 @@ struct RunnerPatcherTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let arch = WineArch.x86_64Windows
-        let live = root.appending(path: "lib/wine/\(arch.rawValue)/ntdll.dll")
+        let live = RunnerLayout.ntdll(in: root, arch: arch)
         let clean = NtdllPatcher.cleanSource(inRoot: root, arch: arch)
         guard clean != live else { return }
 
@@ -91,7 +92,7 @@ struct RunnerPatcherTests {
         guard let (root, build) = try Self.healthyClone() else { return }
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let loader = root.appending(path: "lib/wine/x86_64-unix/wine")
+        let loader = RunnerLayout.loader(in: root)
         let clean = Clean.copy(of: loader)
         guard clean != loader else { return }
 
@@ -100,10 +101,29 @@ struct RunnerPatcherTests {
         ]).status == 0)
 
         #expect(RunnerPatcher.verify(build: build, root: root)
-            == ["x86_64-unix/wine is missing the dyld entitlement"])
+            == ["loader/wine is missing the dyld entitlement"])
 
         let outcome = try RunnerPatcher.install(build: build, root: root)
-        #expect(outcome.loaders == ["x86_64-unix/wine"])
+        #expect(outcome.loaders == ["loader/wine"])
+        #expect(RunnerPatcher.verify(build: build, root: root).isEmpty)
+    }
+
+    // An update of the tree that brings Wine's own d3d12 back would quietly put D3D12 games on
+    // vkd3d again, so verification reports it and the install moves it aside.
+    @Test("A Wine d3d12 builtin that came back is reported, then moved aside by the install")
+    func repairsShadowingD3D12() throws {
+        guard let (root, build) = try Self.healthyClone() else { return }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let builtin = RunnerLayout.peBuiltin(in: root, arch: "x86_64-windows", name: "d3d12.dll")
+        try FileManager.default.moveItem(
+            at: builtin.appendingPathExtension(RunnerPatcher.disabledSuffix), to: builtin)
+
+        #expect(RunnerPatcher.verify(build: build, root: root)
+            == ["x86_64-windows/d3d12.dll still shadows the D3DMetal stub"])
+
+        let outcome = try RunnerPatcher.install(build: build, root: root)
+        #expect(outcome.disabled == ["d3d12.dll"])
         #expect(RunnerPatcher.verify(build: build, root: root).isEmpty)
     }
 

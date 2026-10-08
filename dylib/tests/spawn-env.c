@@ -88,7 +88,7 @@ int main(void) {
     const char *without[] = { "PATH=/bin", "HOME=/Users/x", NULL };
     survives(with, without, "the insert is taken out and the rest kept in order");
 
-    char *only[] = { (char *)"DYLD_INSERT_LIBRARIES=/x.dylib", NULL };
+    char *only[] = { (char *)"DYLD_INSERT_LIBRARIES=/x/notproton.dylib", NULL };
     const char *empty[] = { NULL };
     survives(only, empty, "an environment of nothing but the insert comes back empty");
 
@@ -102,15 +102,15 @@ int main(void) {
     char *longer[] = { (char *)"DYLD_INSERT_LIBRARIES_EXTRA=/x.dylib", NULL };
     survives(longer, NULL, "a longer name sharing the prefix is not the insert");
 
-    char *twice[] = { (char *)"DYLD_INSERT_LIBRARIES=/a.dylib",
+    char *twice[] = { (char *)"DYLD_INSERT_LIBRARIES=/a/notproton.dylib",
                       (char *)"PATH=/bin",
-                      (char *)"DYLD_INSERT_LIBRARIES=/b.dylib", NULL };
+                      (char *)"DYLD_INSERT_LIBRARIES=/b/notproton.dylib", NULL };
     const char *once[] = { "PATH=/bin", NULL };
     survives(twice, once, "every copy of the insert is taken out");
 
     char *blocked[] = { (char *)"PATH=/bin",
                         (char *)"SDL_JOYSTICK_BLACKLIST_DEVICES=0x05ac/0x0004",
-                        (char *)"DYLD_INSERT_LIBRARIES=/x.dylib", NULL };
+                        (char *)"DYLD_INSERT_LIBRARIES=/x/notproton.dylib", NULL };
     survives(blocked, once, "the SDL block list goes with the insert");
 
     char *alone[] = { (char *)"SDL_JOYSTICK_BLACKLIST_DEVICES=0x05ac/0x0004",
@@ -121,10 +121,32 @@ int main(void) {
                     (char *)"SDL_GAMECONTROLLER_IGNORE_DEVICES=0x045e/0x028e", NULL };
     survives(sdl, NULL, "other SDL lists stay");
 
+    // Another tool sharing Steam's insert keeps its libraries in every child, and only
+    // NotProton's own entry leaves.
+    char *shared[] = { (char *)"PATH=/bin",
+                       (char *)"DYLD_INSERT_LIBRARIES=/Applications/Steam.app/Contents/MacOS/other.dylib:"
+                               "/Applications/Steam.app/Contents/MacOS/notproton.dylib", NULL };
+    const char *other[] = { "PATH=/bin",
+                            "DYLD_INSERT_LIBRARIES=/Applications/Steam.app/Contents/MacOS/other.dylib", NULL };
+    survives(shared, other, "another tool's library stays in the insert");
+
+    char *ahead[] = { (char *)"DYLD_INSERT_LIBRARIES=/x/notproton.dylib:/a.dylib::/b.dylib", NULL };
+    const char *rest[] = { "DYLD_INSERT_LIBRARIES=/a.dylib:/b.dylib", NULL };
+    survives(ahead, rest, "every other library keeps its place, and empty entries go");
+
+    char *theirs[] = { (char *)"DYLD_INSERT_LIBRARIES=/a.dylib", (char *)"PATH=/bin", NULL };
+    const char *same[] = { "DYLD_INSERT_LIBRARIES=/a.dylib", "PATH=/bin", NULL };
+    survives(theirs, same, "an insert without NotProton in it is passed on whole");
+
+    // Matched as a file name, so a library whose name only ends the same way stays.
+    char *lookalike[] = { (char *)"DYLD_INSERT_LIBRARIES=/x/notnotproton.dylib:/x/notproton.dylib", NULL };
+    const char *kept[] = { "DYLD_INSERT_LIBRARIES=/x/notnotproton.dylib", NULL };
+    survives(lookalike, kept, "a lookalike name is not NotProton's");
+
     if (failures) {
         printf("==> spawn env: %d check(s) failed\n", failures);
         return 1;
     }
-    printf("==> spawn env: steam_osx and Steam Helper keep the insert, every other child loses it\n");
+    printf("==> spawn env: steam_osx and Steam Helper keep the insert, every other child loses NotProton's entry\n");
     return 0;
 }

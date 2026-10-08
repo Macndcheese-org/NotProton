@@ -84,7 +84,7 @@ enum SteamInstaller {
         let plist = app.appending(path: "Contents/Info.plist")
         let dylib = app.appending(path: "Contents/MacOS/\(SupportPaths.dylibName)")
         try assertBundleIsPresent(app)
-        try assertInsertIsDeployedOrAbsent(at: plist, dylib: dylib)
+        noteSharedInsert(at: plist)
         let installationLock = holdingInstallationLock ? -1 : try DeploymentContent.acquireInstallationLock(for: app)
         defer { if installationLock >= 0 { close(installationLock) } }
         guard let dylibHashes = try MachOBuild.hashesIgnoringSignature(of: payload.dylib) else {
@@ -177,7 +177,7 @@ enum SteamInstaller {
         register(app)
 
         let landed = SteamBundle.currentInsert(at: plist)
-        guard landed == dylib.path(percentEncoded: false) else {
+        guard SteamBundle.insertEntries(landed).contains(dylib.path(percentEncoded: false)) else {
             AppLog.note("install: bundle declares \(landed ?? "no insert")")
             throw StepFailure(
                 step: step,
@@ -234,22 +234,16 @@ enum SteamInstaller {
         }
     }
 
-    static func assertInsertIsDeployedOrAbsent(at plist: URL, dylib: URL) throws {
-        guard let insert = SteamBundle.currentInsert(at: plist), !insert.isEmpty else { return }
-
-        let deployed = dylib.path(percentEncoded: false)
-        let foreign = insert.split(separator: ":").map(String.init).filter { $0 != deployed }
-        guard foreign.isEmpty else {
-            throw StepFailure(
-                step: step,
-                detail: "Another dylib is present. Repair your Steam install before "
-                    + "installing NotProton."
-            )
-        }
+    // Another tool's library in Steam's insert stays, and NotProton is added beside it.
+    static func noteSharedInsert(at plist: URL) {
+        let others = SteamBundle.otherInserts(at: plist)
+        guard !others.isEmpty else { return }
+        AppLog.note("install: keeping \(others.joined(separator: ", ")) in Steam's insert beside NotProton")
     }
 
     static func needsPatching(plist: URL, dylib: URL, shipping: URL, app: URL) throws -> Bool {
-        let deployed = SteamBundle.currentInsert(at: plist) == dylib.path(percentEncoded: false)
+        let deployed = SteamBundle.insertEntries(SteamBundle.currentInsert(at: plist))
+            .contains(dylib.path(percentEncoded: false))
             && SteamBundle.currentControllerBlock(at: plist) == SteamBundle.controllerBlockValue
         let file = DeploymentContent.File(source: shipping, destination: dylib, name: "notproton.dylib", allowsResigning: true)
         if deployed, try file.matches() {
@@ -332,7 +326,8 @@ enum SteamInstaller {
         }
 
         var environment = dict[SteamBundle.environmentKey] as? [String: Any] ?? [:]
-        environment[SteamBundle.insertKey] = dylib.path(percentEncoded: false)
+        environment[SteamBundle.insertKey] = SteamBundle.insert(
+            adding: dylib.path(percentEncoded: false), to: environment[SteamBundle.insertKey] as? String)
         environment[SteamBundle.controllerBlockKey] = SteamBundle.controllerBlockValue
         dict[SteamBundle.environmentKey] = environment
         try SteamBundle.writeInfoPlist(dict, at: plist)

@@ -201,27 +201,24 @@ struct SteamInstallerTests {
         #expect(!(described.stdout + described.stderr).contains("TeamIdentifier=MXGJJ98X76"))
     }
 
-    @Test("An insert belonging to something else stops the install and is left alone")
-    func refusesForeignInsert() async throws {
+    @Test("An insert belonging to something else is kept, and NotProton is added beside it")
+    func sharesForeignInsert() async throws {
         let work = try scratchDirectory("install")
         defer { try? FileManager.default.removeItem(at: work) }
         let fixture = try await self.fixture(into: work)
 
-        let foreign = "/Applications/Steam.app/Contents/MacOS/somethingelse.dylib"
-        try SteamInstaller.setInsert(at: fixture.plist, to: URL(filePath: foreign))
+        let other = "/Applications/Steam.app/Contents/MacOS/somethingelse.dylib"
+        try SteamInstaller.setInsert(at: fixture.plist, to: URL(filePath: other))
 
-        do {
-            _ = try install(fixture)
-            Issue.record("an install over a foreign insert was allowed")
-        } catch let failure as StepFailure {
-                #expect(failure.detail.contains("Repair your Steam install"))
-        }
+        _ = try install(fixture)
 
-        #expect(SteamBundle.currentInsert(at: fixture.plist) == foreign, "the foreign insert was modified")
-        #expect(
-            !FileManager.default.fileExists(atPath: fixture.deployedDylib.path(percentEncoded: false)),
-            "the dylib was copied in despite the refusal"
-        )
+        let own = fixture.deployedDylib.path(percentEncoded: false)
+        #expect(SteamBundle.currentInsert(at: fixture.plist) == "\(other):\(own)")
+        #expect(FileManager.default.fileExists(atPath: own))
+
+        // A second install over the shared list changes nothing.
+        _ = try install(fixture)
+        #expect(SteamBundle.currentInsert(at: fixture.plist) == "\(other):\(own)")
     }
 
     @Test("Installing over an existing install is allowed and refreshes it")
