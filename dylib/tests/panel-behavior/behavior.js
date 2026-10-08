@@ -21,13 +21,17 @@ for (const form of Object.keys(FORMS)) {
        'a shortcut renders the panel before a tool name reaches the page');
 
   let r = nodes('');
-  t.ok(toggles(r).length === 6 && sections(r).length === 3, 'automatic shows six toggles in three sections');
-  t.ok(r.filter(x => x.type === 'Dropdown').length === 2, 'two dropdowns');
+  t.ok(toggles(r).length === 6 && sections(r).length === 2, 'automatic shows six toggles in two sections');
+  // Automatic is D3DMetal, which has no MetalFX upscaler dropdown; DXMT adds the second one.
+  t.ok(r.filter(x => x.type === 'Dropdown').length === 1, 'one dropdown');
+  t.ok(nodes('CX_GRAPHICS_BACKEND=dxmt').filter(x => x.type === 'Dropdown').length === 2,
+       'dxmt adds the upscaler dropdown');
   t.ok(!('label' in r.find(x => x.type === 'Dropdown').props), 'the backend dropdown carries no label column');
 
   r = nodes('CX_GRAPHICS_BACKEND=dxmt');
-  t.ok(toggles(r).filter(l => l === 'DLSS').length === 1 && sections(r).includes('MetalFX'),
-       'dxmt keeps one DLSS and keeps MetalFX');
+  // MnC Wine's DXMT pack carries no nvapi64/nvngx of its own, so DXMT offers no DLSS.
+  t.ok(toggles(r).filter(l => l === 'DLSS').length === 0 && sections(r).includes('MetalFX'),
+       'dxmt shows no DLSS and keeps MetalFX');
   r = nodes('CX_GRAPHICS_BACKEND=d3dmetal');
   t.ok(toggles(r).filter(l => l === 'DLSS').length === 1 && !sections(r).includes('MetalFX'),
        'd3dmetal keeps one DLSS and hides MetalFX');
@@ -35,7 +39,7 @@ for (const form of Object.keys(FORMS)) {
   // would put the same word on two rows.
   for (const b of ['', 'd3dmetal', 'dxmt', 'dxvk', 'wined3d']) {
     const ls = toggles(nodes(b ? 'CX_GRAPHICS_BACKEND=' + b : ''));
-    t.ok(ls.filter(l => l === 'DLSS').length === (b === 'dxvk' || b === 'wined3d' ? 0 : 1),
+    t.ok(ls.filter(l => l === 'DLSS').length === (b === '' || b === 'd3dmetal' ? 1 : 0),
          `${b || 'automatic'} shows DLSS at most once (${ls.join(',')})`);
   }
   // The row that writes the flag the chosen backend actually reads.
@@ -45,10 +49,6 @@ for (const form of Object.keys(FORMS)) {
     t.ok(last().includes(key + '=1'), `${b} DLSS writes ${key} (${last()})`);
   };
   dlss('d3dmetal', 'D3DM_ENABLE_METALFX');
-  dlss('dxmt', 'DXMT_ENABLE_NVEXT');
-  t.ok(nodes('CX_GRAPHICS_BACKEND=dxmt DXMT_ENABLE_NVEXT=1')
-         .find(x => x.props.label === 'DLSS').props.checked === true,
-       'the dxmt DLSS toggle reads as on from its argument');
 
   t.ok(nodes('CX_GRAPHICS_BACKEND=dxmt').find(x => x.type === 'Dropdown').props.selectedOption === 'dxmt',
        'the backend dropdown reflects the current value');

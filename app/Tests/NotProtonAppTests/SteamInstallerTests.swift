@@ -575,8 +575,7 @@ struct SteamInstallerTests {
         let runners = fixture.support.appending(path: "runners")
         let build = SupportedRunners.all[0]
         let runner = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
-        try FileManager.default.createDirectory(at: runner.appending(path: "lib/wine/x86_64-unix"), withIntermediateDirectories: true)
-        try Data("wrong loader".utf8).write(to: runner.appending(path: "lib/wine/x86_64-unix/wine"))
+        try markClone(runner, loader: "wrong loader")
         let error = try #require(throws: StepFailure.self) {
             try install(fixture, verifyRunner: RunnerInstaller.verifyClone)
         }

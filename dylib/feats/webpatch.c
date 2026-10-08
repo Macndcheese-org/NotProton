@@ -185,7 +185,7 @@ static int out_expand(np_out_t *o, const char *replace, const np_cap_t *caps) {
     "onChange:v=>s(ks.map(k=>[k,v?on:(off||\"\")]))},ks[0])," \
     "b=g(\"CX_GRAPHICS_BACKEND\")," \
     "dm=\"\"===b||\"d3dmetal\"===b," \
-    "dx=\"\"===b||\"dxmt\"===b," \
+    "dx=\"dxmt\"===b," \
     "sw=\"1\"===g(\"DXMT_METALFX_SPATIAL_SWAPCHAIN\")," \
     "F=\"d3d11.metalSpatialUpscaleFactor=\"," \
     "fe=g(\"DXMT_CONFIG\").split(\";\").filter(e=>e.trim())," \
@@ -215,7 +215,6 @@ static int out_expand(np_out_t *o, const char *replace, const np_cap_t *caps) {
     ".concat(\"dxmt\"===v.data?[]:[[\"DXMT_ENABLE_NVEXT\",\"\"]]))})," \
     "T([\"MTL_HUD_ENABLED\"],\"Metal HUD\",\"1\")," \
     "dm&&T([\"D3DM_ENABLE_METALFX\"],\"DLSS\",\"1\")," \
-    "\"dxmt\"===b&&T([\"DXMT_ENABLE_NVEXT\"],\"DLSS\",\"1\")," \
     "T([\"ROSETTA_ADVERTISE_AVX\"],\"Advertise AVX2 to Rosetta\",\"1\",\"0\")," \
     "T([\"WINEMSYNC\"],\"MSync\",\"1\",\"0\")," \
     "T([\"NOTPROTON_RETINA\"],\"High Resolution\",\"1\",\"0\")" \

@@ -606,11 +606,12 @@ stage_mnc_d3d() {
       place_pack_file "$src" "${pair#*:}/d3d9.dll" || d3d9_native=0
     done
   fi
-  # DLSS on D3DMetal goes through Apple's nvapi64 and nvngx-on-metalfx.
+  # DLSS on D3DMetal goes through Apple's nvapi64, and nvngx-on-metalfx answers to the name
+  # games load NGX by, as the toolkit's Read Me sets it up.
   if [ "$mnc_backend" = d3dmetal ] && [ "$D3DM_ENABLE_METALFX" = 1 ]; then
-    for name in nvapi64.dll nvngx-on-metalfx.dll; do
-      [ ! -f "$mnc_pack/$mnc_d3dm/$name" ] \
-        || place_pack_file "$mnc_pack/$mnc_d3dm/$name" "$sys32/$name" || true
+    for pair in nvapi64.dll:nvapi64.dll nvngx-on-metalfx.dll:nvngx.dll; do
+      [ ! -f "$mnc_pack/$mnc_d3dm/${pair%%:*}" ] \
+        || place_pack_file "$mnc_pack/$mnc_d3dm/${pair%%:*}" "$sys32/${pair#*:}" || true
     done
   fi
   echo "d3d: staged $staged_count file(s) from $mnc_pack ($mnc_d3dm), d3d9 native=$d3d9_native" \
@@ -1071,9 +1072,8 @@ fi
 
 # The engine's own defaults come first, so overrides from the launch options still win.
 mnc_overrides="winemenubuilder.exe=d;d3dcompiler_47=n,b;msvcp140_2,vcruntime140_1=n,b"
-if [ "$mnc_backend" = d3dmetal ] && [ "$D3DM_ENABLE_METALFX" = 1 ]; then
-  mnc_overrides="$mnc_overrides;nvapi64,nvngx-on-metalfx=n"
-else
+# Without DLSS the game is kept off nvapi, which would otherwise report an NVIDIA GPU.
+if [ "$mnc_backend" != d3dmetal ] || [ "$D3DM_ENABLE_METALFX" != 1 ]; then
   mnc_overrides="$mnc_overrides;nvapi,nvapi64="
 fi
 [ "${d3d9_native:-0}" != 1 ] || mnc_overrides="$mnc_overrides;d3d9=n"
