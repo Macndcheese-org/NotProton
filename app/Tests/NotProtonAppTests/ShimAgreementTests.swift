@@ -40,7 +40,8 @@ struct ShimAgreementTests {
     func ntdllArchesAgree() throws {
         let lists = Self.archLists(in: try Self.verifyRunnerBlock())
         #expect(lists.count == 2)
-        #expect(lists.first == Set(WineArch.allCases.map(\.rawValue)))
+        let patched = Set(SupportedRunners.all.flatMap { $0.patchedNtdll.keys }.map(\.rawValue))
+        #expect(lists.first == patched)
     }
 
     @Test("The shim checks the builtins the app installs")
@@ -50,10 +51,10 @@ struct ShimAgreementTests {
 
         #expect(lists.count == 2)
 
-        // The windows halves are named literally. The unix one is whichever arch directory the
-        // loader turned up in, so both sides resolve that rather than naming a fixed arch.
+        // The windows halves are named literally. The unix one is the arch the script names
+        // the build's unix side by, so both sides resolve that rather than naming it twice.
         let arches = try #require(lists.last)
-        let unix = "\"${wine_unix##*/}\""
+        let unix = "\"$wine_unix_arch\""
         #expect(arches.contains(unix))
         #expect(arches.subtracting([unix]) == Set(RunnerPatcher.windowsBuiltins.map(\.arch)))
 

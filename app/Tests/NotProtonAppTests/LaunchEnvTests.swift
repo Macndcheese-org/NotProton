@@ -36,14 +36,16 @@ struct LaunchEnvTests {
             "the trio must follow the launch option, because ntdll keeps the last setting")
     }
 
-    @Test("A launch option cannot shadow the runner's own dlls")
-    func dllPathKeepsTheRunnerFirst() throws {
-        let line = try Self.line(containing: "export WINEDLLPATH=", "x86_64-windows")
-        let runner = try #require(line.range(of: "$CX_ROOT/lib/wine/x86_64-windows"))
-        let user = try #require(line.range(of: "${WINEDLLPATH:+"))
+    // A build tree resolves its own builtins before anything on WINEDLLPATH, so the path only
+    // carries the bridge, which has to come ahead of a launch option.
+    @Test("A launch option cannot shadow the bridge dlls")
+    func dllPathKeepsTheBridgeFirst() throws {
+        let line = try Self.line(containing: "export WINEDLLPATH=", "$prefix_steam")
+        let bridge = try #require(line.range(of: "$prefix_steam"))
+        let user = try #require(line.range(of: "$WINEDLLPATH"))
         #expect(
-            runner.lowerBound < user.lowerBound,
-            "the runner must precede the launch option, because the loader takes the first match")
+            bridge.lowerBound < user.lowerBound,
+            "the bridge must precede the launch option, because the loader takes the first match")
     }
 
     @Test("The prefix and loader are not taken from launch options")
@@ -57,11 +59,8 @@ struct LaunchEnvTests {
                 "\(name) must not fall back to what it inherits, which a launch option now sets")
         }
 
-        let path = try Self.line(containing: "export PATH=")
-        let runner = try #require(path.range(of: "$CX_ROOT/bin"))
-        let inherited = try #require(path.range(of: ":$PATH"))
-        #expect(
-            runner.lowerBound < inherited.lowerBound,
-            "the runner's tools must precede an inherited PATH, which a launch option now sets")
+        // The loader and server come from the build tree, whatever a launch option sets.
+        _ = try Self.line(containing: "WINELOADER=\"$MNC_ROOT/loader/wine\"")
+        _ = try Self.line(containing: "WINESERVER=\"$MNC_ROOT/server/wineserver\"")
     }
 }

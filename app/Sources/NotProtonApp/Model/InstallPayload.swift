@@ -1,4 +1,4 @@
-// Deploys core NotProton components into the copy of CrossOver that NotProton deploys to the Steam location
+// Deploys core NotProton components into Steam and the installed MnC Wine runner
 
 import Foundation
 

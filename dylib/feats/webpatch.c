@@ -159,7 +159,7 @@ static int out_expand(np_out_t *o, const char *replace, const np_cap_t *caps) {
     "const n=G.findIndex(w=>m(w)||!/^[A-Za-z_]\\w*=/.test(o.slice(w.start,w.end)));" \
     "return{p:G[0].start,e:G.slice(0,n<0?G.length:n)}})(),"
 
-// CrossOver options panel. Not in great shape, but it'll do
+// Wine options panel. Not in great shape, but it'll do
 #define NP_CX_OPTIONS_CSS \
     "\".MSCXPanel{margin-top:10px}" \
     ".MSCXPanel .MSCXRow{display:flex;flex-direction:row;padding:9px;margin:0;" \
@@ -198,11 +198,10 @@ static int out_expand(np_out_t *o, const char *replace, const np_cap_t *caps) {
     "{data:\"1.72\",label:\"1.72x\"}," \
     "{data:\"2.0\",label:\"2x\"}," \
     "{data:\"3.0\",label:\"3x\"}]," \
-    "B=[{data:\"\",label:\"Automatic\"}," \
-    "{data:\"d3dmetal\",label:\"D3DMetal\"}," \
+    "B=[{data:\"\",label:\"Automatic (D3DMetal)\"}," \
+    "{data:\"d3dmetal\",label:\"D3DMetal (GPTK)\"}," \
     "{data:\"dxmt\",label:\"DXMT\"}," \
-    "{data:\"dxvk\",label:\"DXVK\"}," \
-    "{data:\"wined3d\",label:\"WineD3D\"}];" \
+    "{data:\"wined3d\",label:\"OpenGL (WineD3D)\"}];" \
     "if(t.unAppID<2147483648&&(t.vecPlatforms||[]).indexOf(\"osx\")>=0" \
     "&&!t.strCompatToolName)return null;" \
     "return(0," RT ".jsx)(\"div\",{className:\"MSCXPanel\",children:(0," RT ".jsxs)(" RT ".Fragment,{children:[" \
@@ -237,7 +236,7 @@ static int out_expand(np_out_t *o, const char *replace, const np_cap_t *caps) {
 #define NP_CX_OPTIONS_STATEMENT \
     "var MSCXOpts=" NP_CX_OPTIONS_BODY("np", NP_C3, NP_C4) ";"
 
-// 1.0.x saved CrossOver settings without %command%, this migrates them.
+// 1.0.x saved Wine settings without %command%, this migrates them.
 #define NP_LAUNCH_MIGRATION_RULE \
     "o=>{const T=/(?:[^\\s\"'\\\\]|\\\\[^]|\"(?:[^\"\\\\]|\\\\[^])*\"|'[^']*')+/g," \
     "w=o.match(T)||[]," \
@@ -301,7 +300,7 @@ static const np_gate_t g_gates_forcetool[] = {
       "!s.local_per_client_data?.installed&&"
       "s.most_available_per_client_data?.is_invalid_os_type&&(0,n.jsx)(U,{})", 1 },
     { "(0,h.we)(\"#GameList_Entry_Invalid_OSType2\")",
-      "\"Enable CrossOver under Properties > Compatibility to install and run "
+      "\"Enable MnC Wine under Properties > Compatibility to install and run "
       "the Windows version.\"", 1 },
 };
 
@@ -334,7 +333,7 @@ static const np_gate_t g_gates_selecttool[] = {
       NP_C1 ".most_available_per_client_data?.is_invalid_os_type&&"
       "(0," NP_C2 ".jsx)(" NP_C3 ",{})", 1 },
     { "(0," NP_C1 ".we)(\"#GameList_Entry_Invalid_OSType2\")",
-      "\"Enable CrossOver under Properties > Compatibility to install and run "
+      "\"Enable MnC Wine under Properties > Compatibility to install and run "
       "the Windows version.\"", 1 },
 };
 

@@ -1,4 +1,4 @@
-// Clones CrossOver, throws it in bridge, invokes ntdll patch,
+// Unpacks MnC Wine, stages its patched ntdll in the bridge, and installs the compatibility tool
 
 import Foundation
 
@@ -12,7 +12,7 @@ enum RunnerSetup {
 
         var label: String {
             switch self {
-            case .cloning: "Copying CrossOver"
+            case .cloning: "Unpacking MnC Wine"
             case .staging: "Patching"
             case .patching: "Installing compatibility tool"
             case .finished: "Done"
@@ -30,14 +30,12 @@ enum RunnerSetup {
     }
 
     static func run(
-        from install: CrossOverInstall,
+        from archive: WineArchive,
         replacingExisting: Bool = false,
         report: @Sendable (Phase) -> Void = { _ in }
     ) throws -> Outcome {
-        try CrossOverLicense.requireValid(for: install)
-
         report(.cloning)
-        let build = try RunnerInstaller.clone(from: install, replacingExisting: replacingExisting)
+        let build = try RunnerInstaller.clone(from: archive, replacingExisting: replacingExisting)
         return try prepare(build, report: report)
     }
 
@@ -50,7 +48,6 @@ enum RunnerSetup {
         toolList: URL = SupportPaths.toolList,
         compatTools: URL = SupportPaths.Steam.compatTools,
         runScript: () throws -> URL = { try InstallPayload.locate().run },
-        license: (URL) -> CrossOverLicense.Status = { CrossOverLicense.check(crossOverRoot: $0) },
         verify: (RunnerBuild, URL) throws -> Void = RunnerInstaller.verifyClone,
         stage: (RunnerBuild, URL, URL) throws -> [WineArch] = {
             try NtdllPatcher.stage(build: $0, runnerRoot: $1, bridge: $2)
@@ -67,11 +64,6 @@ enum RunnerSetup {
         }
 
         let root = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
-        let status = license(root)
-        guard status.licensed else {
-            throw StepFailure(step: "Verify CrossOver license", detail: status.detail)
-        }
-
         try verify(build, root)
 
         report(.staging)

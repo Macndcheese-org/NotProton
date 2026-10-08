@@ -18,16 +18,16 @@ trap 'rm -rf "$work"' EXIT
 
 np_support="$work/support"
 clone() {
-	inf="$np_support/runners/crossover-$1/CrossOver/share/wine/wine.inf"
+	inf="$np_support/runners/mnc-$1/wine/loader/wine.inf"
 	mkdir -p "$(dirname "$inf")"
 	: > "$inf"
 	touch -t "$2" "$inf"
 }
-clone 26.3.0.39832 202607151200
-clone 27.0.0.40921-fex 202608211200
-printf 'notproton\t27.0.0.40921-fex\tfex\tCrossOver Preview (FEX)\nnotproton-26.3\t26.3.0.39832\trosetta\tCrossOver 26.3\n' \
+clone 11.18-aaaaaaaa 202607151200
+clone 11.19-bbbbbbbb 202608211200
+printf 'notproton-mnc-next\t11.19-bbbbbbbb\trosetta\tMnC Wine 11.19\nnotproton-mnc\t11.18-aaaaaaaa\trosetta\tMnC Wine 11.18\n' \
 	> "$np_support/tools"
-mtime() { stat -f %m "$np_support/runners/crossover-$1/CrossOver/share/wine/wine.inf"; }
+mtime() { stat -f %m "$np_support/runners/mnc-$1/wine/loader/wine.inf"; }
 
 fails=0
 ok() { printf '  ok    %s\n' "$1"; }
@@ -44,7 +44,7 @@ launch() {
 		STEAM_COMPAT_DATA_PATH=$data
 		np_build=$build
 		np_display="display of $build"
-		CX_ROOT="$np_support/runners/crossover-$build/CrossOver"
+		MNC_ROOT="$np_support/runners/mnc-$build/wine"
 		log=/dev/null
 		# shellcheck disable=SC2329 # called by the extracted refusal
 		show_alert() { printf 'alert: %s\n' "$2"; }
@@ -59,29 +59,29 @@ launch() {
 
 echo "== prefixes from before the record =="
 is "a fresh prefix is claimed" "status=0
-26.3.0.39832" "$(launch 26.3.0.39832 "" "")"
+11.18-aaaaaaaa" "$(launch 11.18-aaaaaaaa "" "")"
 is "a prefix this build last updated is claimed" "status=0
-26.3.0.39832" "$(launch 26.3.0.39832 "$(mtime 26.3.0.39832)" "")"
+11.18-aaaaaaaa" "$(launch 11.18-aaaaaaaa "$(mtime 11.18-aaaaaaaa)" "")"
 is "a prefix another clone updated is refused and named" "status=1
-last run by CrossOver Preview (FEX)" "$(launch 26.3.0.39832 "$(mtime 27.0.0.40921-fex)" "")"
+last run by MnC Wine 11.19" "$(launch 11.18-aaaaaaaa "$(mtime 11.19-bbbbbbbb)" "")"
 is "a prefix no clone updated is refused" "status=1
-last run by another version of CrossOver" "$(launch 26.3.0.39832 1 "")"
+last run by another Wine build" "$(launch 11.18-aaaaaaaa 1 "")"
 is "updates the user disabled say nothing, so the prefix is claimed" "status=0
-26.3.0.39832" "$(launch 26.3.0.39832 disable "")"
+11.18-aaaaaaaa" "$(launch 11.18-aaaaaaaa disable "")"
 
-clone 27.0.0.40921 202608211200
+clone 11.20-cccccccc 202608211200
 is "a prefix either of two clones updated names neither" "status=1
-last run by another version of CrossOver" "$(launch 26.3.0.39832 "$(mtime 27.0.0.40921)" "")"
+last run by another Wine build" "$(launch 11.18-aaaaaaaa "$(mtime 11.20-cccccccc)" "")"
 
 echo "== prefixes with a record =="
 is "the record wins over the Wine that updated the prefix" "status=0
-27.0.0.40921-fex" "$(launch 27.0.0.40921-fex "$(mtime 26.3.0.39832)" "27.0.0.40921-fex
-CrossOver Preview (FEX)
+11.19-bbbbbbbb" "$(launch 11.19-bbbbbbbb "$(mtime 11.18-aaaaaaaa)" "11.19-bbbbbbbb
+MnC Wine 11.19
 ")"
 is "a record for another build is refused" "status=1
-last run by CrossOver Preview (FEX)
-27.0.0.40921-fex" "$(launch 26.3.0.39832 "" "27.0.0.40921-fex
-CrossOver Preview (FEX)
+last run by MnC Wine 11.19
+11.19-bbbbbbbb" "$(launch 11.18-aaaaaaaa "" "11.19-bbbbbbbb
+MnC Wine 11.19
 ")"
 
 if [ "$fails" -eq 0 ]; then

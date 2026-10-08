@@ -519,7 +519,7 @@ struct SteamInstallerTests {
         let runners = fixture.support.appending(path: "runners")
         let build = SupportedRunners.all[0]
         let runner = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
-        try FileManager.default.createDirectory(at: runner.appending(path: "lib/wine"), withIntermediateDirectories: true)
+        try markClone(runner)
 
         _ = try install(fixture)
 
@@ -546,7 +546,7 @@ struct SteamInstallerTests {
         let fixture = try await self.fixture(into: work)
         let runner = SupportPaths.clonedRoot(forBuild: SupportedRunners.all[0].id,
                                             runners: fixture.support.appending(path: "runners"))
-        try FileManager.default.createDirectory(at: runner.appending(path: "lib/wine"), withIntermediateDirectories: true)
+        try markClone(runner)
 
         let error = try #require(throws: StepFailure.self) { try install(fixture, running: true) }
 
@@ -561,7 +561,7 @@ struct SteamInstallerTests {
         defer { try? FileManager.default.removeItem(at: work) }
         let fixture = try await self.fixture(into: work)
         let runner = SupportPaths.clonedRoot(forBuild: "99.0.0.12345", runners: fixture.support.appending(path: "runners"))
-        try FileManager.default.createDirectory(at: runner.appending(path: "lib/wine"), withIntermediateDirectories: true)
+        try markClone(runner)
         let error = try #require(throws: StepFailure.self) { try install(fixture, running: true) }
         #expect(error.detail.contains("99.0.0.12345"))
         #expect(!FileManager.default.fileExists(atPath: fixture.deployedDylib.path))

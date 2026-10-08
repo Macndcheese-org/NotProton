@@ -32,16 +32,19 @@ enum AppLog {
             "state installContent=\(snapshot.installContent)",
         ]
 
-        if snapshot.crossOver.isEmpty {
-            lines.append("state crossOver=none found")
+        if snapshot.archives.isEmpty {
+            lines.append("state wineArchive=none found")
         }
-        for install in snapshot.crossOver {
+        for archive in snapshot.archives {
             lines.append(
-                "state crossOver \(install.name) version=\(install.releaseVersion ?? "unreadable") "
-                    + "support=\(describe(install.support))"
-                    + (install.isManual ? " chosen" : "")
-                    + " at=\(install.bundle.path(percentEncoded: false))"
+                "state wineArchive \(archive.name) "
+                    + "support=\(describe(archive.support))"
+                    + (archive.isManual ? " chosen" : "")
+                    + " at=\(archive.file.path(percentEncoded: false))"
             )
+        }
+        if !snapshot.missingLibraries.isEmpty {
+            lines.append("state missingLibraries=\(snapshot.missingLibraries.map(\.file).joined(separator: ","))")
         }
 
         let payload = snapshot.payload
@@ -82,7 +85,7 @@ enum AppLog {
         }
     }
 
-    private static func describe(_ support: CrossOverSupport) -> String {
+    private static func describe(_ support: ArchiveSupport) -> String {
         switch support {
         case .supported(let build): "supported \(build.id)"
         case .unsupportedBuild(let version): "unsupported build \(version)"

@@ -106,6 +106,21 @@ PINNED = {
          'exports': {'LdrGetDllHandle': 0x18004390c, 'LdrLoadDll': 0x180041344,
                      'NtProtectVirtualMemory': 0x180067050, 'NtOpenFile': 0x180066cb0,
                      'NtReadFile': 0x180066710, 'NtClose': 0x180066830}},
+    # MnC Wine 11.18 (wine-unified-osx64, loader c8fd07a0), run from its build tree.
+    '3b3b3cc1359682555013d58c95d483f8d11a6485040ddfe3b9ea0bfdb1a6e1c7':
+        {'hookRVA': 0x52c96, 'stolen': '4883bc241001000000', 'caveRVA': 0x43e000, 'caveSize': 4096,
+         'wm': 'r14', 'resume': 0x52c9f, 'load_path': 0xf0,
+         'payload': '17977969763496d4d9c4189b7af243e83555c7b593ae1ce4e488774d421261c7',
+         'exports': {'LdrGetDllHandle': 0x170017820, 'LdrLoadDll': 0x170018370,
+                     'NtProtectVirtualMemory': 0x17000f670, 'NtOpenFile': 0x17000f2d0,
+                     'NtReadFile': 0x17000ed30, 'NtClose': 0x17000ee50}},
+    '85755ffc284d2c7e2ab4695794004d1a7437bbd8b12d9455813004bb87b2943e':
+        {'hookRVA': 0x4dbc0, 'stolen': 'f645bc027526', 'caveRVA': 0x7e1c0, 'caveSize': 3648,
+         'resume': 0x4dbc6, 'wm': 'esi', 'load_path': -0x58,
+         'payload': 'e2f80ec5956f2d875b086beebc319673ec35f0ca64a4d39224868d81f4f9d725',
+         'exports': {'LdrGetDllHandle': 0x7bc126e0, 'LdrLoadDll': 0x7bc13200,
+                     'NtProtectVirtualMemory': 0x7bc0d784, 'NtOpenFile': 0x7bc0d5b4,
+                     'NtReadFile': 0x7bc0d2e4, 'NtClose': 0x7bc0d374}},
 }
 EXPORTS = ['LdrGetDllHandle', 'LdrLoadDll', 'NtProtectVirtualMemory',
            'NtOpenFile', 'NtReadFile', 'NtClose']
@@ -694,11 +709,11 @@ def report(path):
 
 
 def ntdlls(arg):
-    """Every ntdll.dll under a bundle, a CrossOver root, or a wine directory."""
+    """Every ntdll.dll under a bundle, a CrossOver root, an MnC Wine build tree, or a wine directory."""
     p = pathlib.Path(arg)
     if p.is_file():
         return [str(p)]
-    for root in (p / 'Contents/SharedSupport/CrossOver/lib/wine', p / 'lib/wine', p):
+    for root in (p / 'Contents/SharedSupport/CrossOver/lib/wine', p / 'lib/wine', p / 'dlls/ntdll', p):
         archs = sorted(d for d in root.glob('*-windows') if d.is_dir())
         if not archs:
             continue
@@ -764,7 +779,7 @@ def shell_vars(path):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        raise SystemExit(f"usage: {sys.argv[0]} [--sh] <CrossOver bundle | wine dir | ntdll.dll> ...")
+        raise SystemExit(f"usage: {sys.argv[0]} [--sh] <MnC Wine tree | CrossOver bundle | wine dir | ntdll.dll> ...")
     if sys.argv[1] == '--sh':
         if len(sys.argv) != 3:
             raise SystemExit("--sh takes one ntdll.dll")

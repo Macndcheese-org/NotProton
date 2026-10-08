@@ -17,8 +17,8 @@ struct StatusSnapshot: Sendable {
     var steam: SteamDeployment
     var steamRunning: Bool
     var updateBlocked: Bool
-    var crossOver: [CrossOverInstall]
-    var crossOverLicense: [String: CrossOverLicense.Status] = [:]
+    var archives: [WineArchive]
+    var missingLibraries: [RuntimeLibraries.Library] = []
     var runner: RunnerState
     var payload: PayloadState
     var installedRunners: [RunnerBuild] = []
@@ -27,11 +27,7 @@ struct StatusSnapshot: Sendable {
     var installContent: DeploymentContent.Status = .unchecked
 
     static func capture(bundledVersion: String) -> StatusSnapshot {
-        let installs = CrossOverSource.discover()
-        var licenses: [String: CrossOverLicense.Status] = [:]
-        for install in installs where install.isUsable {
-            licenses[install.id] = CrossOverLicense.check(crossOverRoot: install.crossOverRoot)
-        }
+        let archives = MncWineSource.discover()
 
         let runner = RunnerStore.state()
         let installed = RunnerStore.installedBuilds()
@@ -40,8 +36,8 @@ struct StatusSnapshot: Sendable {
             steam: SteamBundle.deployment(bundledVersion: bundledVersion),
             steamRunning: SteamBundle.isRunning,
             updateBlocked: UpdateBlock.isPresent(),
-            crossOver: installs,
-            crossOverLicense: licenses,
+            archives: archives,
+            missingLibraries: RuntimeLibraries.missing(),
             runner: runner,
             payload: PayloadInspector.inspect(builds: installed),
             installedRunners: installed,
@@ -69,17 +65,13 @@ final class SystemStatus {
     // Tests replace the refresh so a run does not modify the real Steam/support folders
     // if run on an actual user's machine.
     @ObservationIgnored var refreshAfterRun: @MainActor (SystemStatus) async -> Void = { await $0.refresh() }
-    private var checkingLicense = false
-
-    var isBusy: Bool { activity != nil || runInFlight || checkingLicense }
+    var isBusy: Bool { activity != nil || runInFlight }
     var isIdle: Bool { !isBusy && !isRefreshing }
     var canInstall: Bool { isIdle && snapshot?.installContent.blocksInstallation != true }
 
     enum Confirmation: Identifiable, Hashable {
         case replaceSteam
         case blockUpdates
-        case installUnlicensed
-        case toolUnlicensed
         case removeBuild
         case removeEverything
 
@@ -132,21 +124,20 @@ final class SystemStatus {
         failureRemedy = nil
     }
 
-    var usableCrossOver: CrossOverInstall? {
-        snapshot?.crossOver.first(where: \.isUsable)
+    var usableArchive: WineArchive? {
+        snapshot?.archives.first(where: \.isUsable)
     }
 
-    var usableCrossOvers: [CrossOverInstall] {
-        snapshot?.crossOver.filter(\.isUsable) ?? []
+    var usableArchives: [WineArchive] {
+        snapshot?.archives.filter(\.isUsable) ?? []
     }
 
-    var crossOverRows: [CrossOverRow] {
+    var wineRows: [WineRow] {
         guard let snapshot else { return [] }
         var unpatched: [String] = []
         if case .unpatched(let builds, _) = snapshot.runner { unpatched = builds }
-        return CrossOverRow.rows(
-            installs: snapshot.crossOver,
-            licenses: snapshot.crossOverLicense,
+        return WineRow.rows(
+            archives: snapshot.archives,
             installed: snapshot.installedRunners,
             damaged: snapshot.damagedRunners,
             orphaned: snapshot.orphanedRunners,
@@ -154,11 +145,11 @@ final class SystemStatus {
         )
     }
 
-    var repairSource: CrossOverInstall? {
+    var repairSource: WineArchive? {
         let builds = snapshot?.runner.builds ?? []
         for wanted in builds {
-            let found = usableCrossOvers.first { install in
-                if case .supported(let build) = install.support { return build.id == wanted }
+            let found = usableArchives.first { archive in
+                if case .supported(let build) = archive.support { return build.id == wanted }
                 return false
             }
             if let found { return found }
@@ -166,63 +157,18 @@ final class SystemStatus {
         return nil
     }
 
-    var setupSource: CrossOverInstall? { repairSource ?? usableCrossOver }
-
-    func checkLicense(for chosen: CrossOverInstall? = nil) async -> CrossOverLicense.Status? {
-        guard let install = chosen ?? usableCrossOver else { return nil }
-        let status = await Task.detached(priority: .userInitiated) {
-            CrossOverLicense.check(crossOverRoot: install.crossOverRoot)
-        }.value
-        snapshot?.crossOverLicense[install.id] = status
-        return status
-    }
-
-    enum Request {
-        case install
-        case compatibilityTool
-    }
-
-    nonisolated static func activationQuestion(
-        _ request: Request, licensed: Bool?, runner: RunnerState
-    ) -> Confirmation? {
-        guard licensed == false else { return nil }
-        switch request {
-        case .install: return runner == RunnerState.none ? .installUnlicensed : nil
-        case .compatibilityTool: return .toolUnlicensed
-        }
-    }
+    var setupSource: WineArchive? { repairSource ?? usableArchive }
 
     func requestInstall() async {
         guard canInstall else { return }
-        checkingLicense = true
-        defer { checkingLicense = false }
-        if let question = Self.activationQuestion(
-            .install,
-            licensed: await checkLicense()?.licensed,
-            runner: snapshot?.runner ?? RunnerState.none
-        ) {
-            pendingConfirmation = question
-        } else {
-            await installIntoSteam()
-        }
+        await installIntoSteam()
     }
 
     func requestCompatibilityTool(
-        from chosen: CrossOverInstall? = nil, replacingExisting: Bool = false
+        from chosen: WineArchive? = nil, replacingExisting: Bool = false
     ) async {
         guard canInstall else { return }
-        checkingLicense = true
-        defer { checkingLicense = false }
-        let install = chosen ?? setupSource
-        if let question = Self.activationQuestion(
-            .compatibilityTool,
-            licensed: await checkLicense(for: install)?.licensed,
-            runner: snapshot?.runner ?? RunnerState.none
-        ) {
-            pendingConfirmation = question
-        } else {
-            await setUpRunner(from: install, replacingExisting: replacingExisting)
-        }
+        await setUpRunner(from: chosen ?? setupSource, replacingExisting: replacingExisting)
     }
 
     private(set) var pendingRemoval: String?
@@ -252,39 +198,42 @@ final class SystemStatus {
         }
     }
 
-    func addCrossOver() async {
+    func addArchive() async {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.application]
+        panel.allowedContentTypes = [UTType(filenameExtension: "xz") ?? .data]
         panel.prompt = "Add"
-        panel.message = "Select a copy of CrossOver."
-        panel.directoryURL = URL(filePath: "/Applications", directoryHint: .isDirectory)
+        panel.message = "Select an MnC Wine release (wine-unified-osx64.tar.xz)."
+        panel.directoryURL = MncWineSource.searchRoots.first
 
         guard panel.runModal() == .OK, let picked = panel.url else { return }
 
         clearFailure()
         outcome = nil
 
-        guard CrossOverSource.looksLikeCrossOver(picked) else {
-            setFailure("\(picked.lastPathComponent) is not a valid copy of CrossOver.")
-            AppLog.note("crossOver choice refused: \(picked.path(percentEncoded: false))")
+        guard MncWineSource.looksLikeArchive(picked) else {
+            setFailure("\(picked.lastPathComponent) is not an MnC Wine release tarball.")
+            AppLog.note("wine archive choice refused: \(picked.path(percentEncoded: false))")
             return
         }
 
         await refresh()
-        if let row = CrossOverRow.listing(CrossOverSource.inspect(bundle: picked), in: crossOverRows) {
-            AppLog.note("crossOver already listed: \(picked.path(percentEncoded: false))")
+        let inspected = await Task.detached(priority: .userInitiated) {
+            MncWineSource.inspect(archive: picked)
+        }.value
+        if let row = WineRow.listing(inspected, in: wineRows) {
+            AppLog.note("wine archive already listed: \(picked.path(percentEncoded: false))")
             highlight(row)
             return
         }
-        CrossOverSource.addManualBundle(picked)
-        AppLog.note("crossOver added: \(picked.path(percentEncoded: false))")
+        MncWineSource.addManualArchive(picked)
+        AppLog.note("wine archive added: \(picked.path(percentEncoded: false))")
         await refresh()
     }
 
-    private func highlight(_ row: CrossOverRow) {
+    private func highlight(_ row: WineRow) {
         AccessibilityNotification.Announcement("\(row.title) is already listed.").post()
         highlightReset?.cancel()
         highlightedRow = row.id
@@ -295,12 +244,12 @@ final class SystemStatus {
         }
     }
 
-    func removeFromList(_ install: CrossOverInstall) async {
+    func removeFromList(_ archive: WineArchive) async {
         guard isIdle else { return }
         clearFailure()
         outcome = nil
-        CrossOverSource.removeManualBundle(install.bundle)
-        AppLog.note("crossOver removed from list: \(install.id)")
+        MncWineSource.removeManualArchive(archive.file)
+        AppLog.note("wine archive removed from list: \(archive.id)")
         await refresh()
     }
 
@@ -339,10 +288,11 @@ final class SystemStatus {
         await refreshAfterRun(self)
     }
 
-    private func setUpRunner(from install: CrossOverInstall?, replacingExisting: Bool = false) async {
-        guard let install else {
-            setFailure("No supported copy of CrossOver found.")
-            AppLog.note("run refused: no supported CrossOver")
+    private func setUpRunner(from archive: WineArchive?, replacingExisting: Bool = false) async {
+        guard let archive else {
+            setFailure("No supported MnC Wine release found. Put wine-unified-osx64.tar.xz in Downloads "
+                       + "or add it with Add Release.")
+            AppLog.note("run refused: no supported MnC Wine release")
             outcome = nil
             return
         }
@@ -352,7 +302,7 @@ final class SystemStatus {
             defer { close(lock) }
             try await requireInstallableContent()
             let result = try await Task.detached(priority: .userInitiated) {
-                try RunnerSetup.run(from: install, replacingExisting: replacingExisting) {
+                try RunnerSetup.run(from: archive, replacingExisting: replacingExisting) {
                     progress($0.label)
                 }
             }.value
@@ -373,9 +323,6 @@ final class SystemStatus {
     }
 
     private static let restartHint = "Steam was stopped, so start it again."
-
-    private static let toolNotActivated =
-        "The compatibility tool was not set up because CrossOver is not activated."
 
     private func requireInstallableContent() async throws {
         try await requireUnblockedContent()
@@ -411,23 +358,17 @@ final class SystemStatus {
 
             var parts = ["NotProton successfully installed."]
             if result.stoppedClient { parts.append(Self.restartHint) }
-            let install = usableCrossOver
-            let state = await Task.detached(priority: .userInitiated) {
-                (runner: RunnerStore.state(),
-                 payload: PayloadInspector.inspect(),
-                 license: install.map { CrossOverLicense.check(crossOverRoot: $0.crossOverRoot) })
+            let archive = usableArchive
+            let runner = await Task.detached(priority: .userInitiated) {
+                RunnerStore.state()
             }.value
 
-            if let install, state.license?.licensed == true, state.runner == .none {
+            if let archive, runner == .none {
                 progress("Setting up compatibility tool")
-                // A tool that came up is the expected case and goes unsaid. Failure
-                // throws, and an unactivated CrossOver is reported below.
+                // A tool that came up is the expected case and goes unsaid. Failure throws.
                 _ = try await Task.detached(priority: .userInitiated) {
-                    try RunnerSetup.run(from: install) { progress($0.label) }
+                    try RunnerSetup.run(from: archive) { progress($0.label) }
                 }.value
-            } else if install != nil, state.license?.licensed == false, state.runner == .none {
-                // Not a failure, NotProton was installed but without a compatibility tool
-                parts.append(Self.toolNotActivated)
             }
 
             // Fetch binaries from Valve

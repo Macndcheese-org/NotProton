@@ -208,9 +208,7 @@ struct TemplateCleanupTests {
         let layout = try Layout()
         defer { try? FileManager.default.removeItem(at: layout.root) }
         let build = "26.3.0.39832"
-        try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: build, runners: layout.runners).appending(path: "lib/wine"),
-            withIntermediateDirectories: true)
+        try markClone(SupportPaths.clonedRoot(forBuild: build, runners: layout.runners))
         let other = SteamLibrary(root: layout.root.appending(path: "second-library"))
         let otherTemplate = SupportPaths.prefixTemplates(forBuild: build, in: other)[1]
         try FileManager.default.createDirectory(at: otherTemplate, withIntermediateDirectories: true)
@@ -238,9 +236,7 @@ struct TemplateCleanupTests {
         let layout = try Layout()
         defer { try? FileManager.default.removeItem(at: layout.root) }
         let build = "27.0.0.40921-fex"
-        try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: build, runners: layout.runners).appending(path: "lib/wine"),
-            withIntermediateDirectories: true)
+        try markClone(SupportPaths.clonedRoot(forBuild: build, runners: layout.runners))
         for (flavor, size) in [(CompatTool.Flavor.fex, 4 << 20), (.rosetta, 1 << 20)] {
             let template = SupportPaths.prefixTemplate(forBuild: build, flavor: flavor, in: layout.library)
             try FileManager.default.createDirectory(at: template, withIntermediateDirectories: true)

@@ -29,7 +29,7 @@ for arch in aarch64-unix x86_64-unix; do
 	mkdir -p "$work/bridge/$arch"
 	printf '%s bridge\n' "$arch" > "$work/bridge/$arch/lsteamclient.so"
 done
-wine_unix="$work/runner/aarch64-unix"
+wine_unix_arch=aarch64-unix
 
 fails=0
 ok() { printf '  ok    %s\n' "$1"; }
@@ -46,7 +46,7 @@ cross=""
 stage() {
 	: > "$work/log"
 	env bridge_src="$work/bridge" WINEPREFIX="$prefix" prefix_steam="$steam" \
-		log="$work/log" body="$body" wine_unix="$wine_unix" \
+		log="$work/log" body="$body" wine_unix_arch="$wine_unix_arch" \
 		STEAM_COMPAT_DATA_PATH="$compat" cross="$cross" \
 		sh -ec 'eval "$body"; echo reached' > "$work/out" 2>&1 || true
 }
@@ -70,7 +70,7 @@ logged "the copy is recognised" "=== bridge already staged ==="
 is "the unix library survives pruning" "aarch64-unix bridge" "$(cat "$steam/lsteamclient.so" 2>/dev/null)"
 
 echo "== a different Wine architecture replaces the unix library"
-wine_unix="$work/runner/x86_64-unix"
+wine_unix_arch=x86_64-unix
 stage
 unlogged "the old architecture is not taken as current" "=== bridge already staged ==="
 is "the x86_64 unix library replaces the ARM64 copy" "x86_64-unix bridge" "$(cat "$steam/lsteamclient.so" 2>/dev/null)"

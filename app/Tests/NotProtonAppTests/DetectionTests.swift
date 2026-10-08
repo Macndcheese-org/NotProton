@@ -31,8 +31,6 @@ struct SupportedRunnerTests {
 
     @Test("Identities are unique so lookup is unambiguous")
     func identitiesAreUnique() {
-        // Versions are deliberately not unique here: CodeWeavers ships flavors sharing one,
-        // which is why neither the lookup key nor the clone directory is the version.
         let ids = SupportedRunners.all.map(\.id)
         #expect(Set(ids).count == ids.count)
 
@@ -40,40 +38,35 @@ struct SupportedRunnerTests {
         #expect(Set(loaders).count == loaders.count)
     }
 
-    @Test("The first supported build keeps a bare version as its id")
-    func firstBuildKeepsBareVersionID() {
-        // Its clone is already on disk as crossover-<version>, and a machine whose CrossOver
-        // has since been replaced by another flavor could not produce that clone again.
-        let build = SupportedRunners.all[0]
-        #expect(build.flavor == nil)
-        #expect(build.id == build.bundleVersion)
+    @Test("A build id is the Wine version and its loader hash, and names the runner folder")
+    func buildIDShape() {
+        for build in SupportedRunners.all {
+            #expect(build.flavor == nil)
+            #expect(build.id == build.bundleVersion)
+            #expect(build.id == "\(build.releaseVersion)-\(build.loaderSHA256.prefix(8))")
+            #expect(build.displayVersion == "MnC Wine \(build.releaseVersion)")
+        }
     }
 
-    // Picking the FEX CrossOver used to read "Build 27.0.0.40921", the same as the Rosetta one.
-    // Which had been picked only became visible once the clone directory carried the flavor.
-    @Test("A build is named by its flavor as well as its version")
-    func buildsAreNamedByFlavor() {
-        let rosetta = try! #require(SupportedRunners.build(id: "27.0.0.40921"))
-        let fex = try! #require(SupportedRunners.build(id: "27.0.0.40921-fex"))
-
-        #expect(rosetta.bundleVersion == fex.bundleVersion)
-        #expect(rosetta.releaseVersion == fex.releaseVersion)
-        #expect(rosetta.displayVersion == "20260821 Rosetta")
-        #expect(fex.displayVersion == "20260821 FEX")
-        #expect(rosetta.displayVersion != fex.displayVersion)
-    }
-
-    // The installed row has only the clone directory name, which is the id.
+    // The installed row has only the runner folder name, which is the id.
     @Test("An installed build is named the same way the picked one is")
     func installedBuildsReadBackTheSame() {
         for build in SupportedRunners.all {
             #expect(SupportedRunners.displayVersion(forID: build.id) == build.displayVersion)
-            #expect(!SupportedRunners.displayVersion(forID: build.id).contains("-fex"))
         }
 
         // A tree off the allow list still has to say something, and its directory name is
         // all there is to say.
-        #expect(SupportedRunners.displayVersion(forID: "26.0.1.1234") == "26.0.1.1234")
+        #expect(SupportedRunners.displayVersion(forID: "11.0-00000000") == "11.0-00000000")
+    }
+
+    @Test("Every build is recognized by its release tarball")
+    func archiveLookup() {
+        for build in SupportedRunners.all {
+            let hash = try! #require(build.archiveSHA256)
+            #expect(SupportedRunners.build(archiveSHA256: hash) == build)
+        }
+        #expect(SupportedRunners.build(archiveSHA256: "") == nil)
     }
 
     @Test("Lookup matches on an exact loader hash only")
@@ -95,44 +88,12 @@ struct SupportedRunnerTests {
 @Suite("Steam tools")
 struct CompatToolOrderTests {
 
-    private func build(_ id: String) throws -> RunnerBuild {
-        try #require(SupportedRunners.build(id: id))
-    }
-
-    @Test("Tools come out in preference order whatever order the builds are in")
-    func order() throws {
-        let tools = SupportedRunners.tools(for: [
-            try build("26.3.0.39832"), try build("27.0.0.40921-fex"),
-        ])
-        #expect(tools.map(\.name) == ["notproton-fex", "notproton-fex-rosetta", "notproton-26.3"])
-        #expect(tools.map(\.build) == ["27.0.0.40921-fex", "27.0.0.40921-fex", "26.3.0.39832"])
-    }
-
-    @Test("Each Preview keeps its own tools when both are set up")
-    func bothPreviews() throws {
-        let tools = SupportedRunners.tools(for: [
-            try build("27.0.0.40921-fex"), try build("27.0.0.40921"),
-        ])
-        #expect(tools.map(\.name) == ["notproton-fex", "notproton-fex-rosetta", "notproton-preview"])
-        #expect(tools.map(\.build) == ["27.0.0.40921-fex", "27.0.0.40921-fex", "27.0.0.40921"])
-        #expect(Set(tools.map(\.display)).count == tools.count)
-    }
-
-    @Test("The Rosetta-only Preview can hold the legacy name")
-    func rosettaPreviewAlone() throws {
-        let tools = SupportedRunners.tools(for: [try build("27.0.0.40921")], legacy: .build("27.0.0.40921"))
-        #expect(tools.map(\.name) == ["notproton"])
+    @Test("The MnC Wine build serves one Rosetta tool")
+    func mncTool() throws {
+        let tools = SupportedRunners.tools(for: SupportedRunners.all)
+        #expect(tools.map(\.name) == ["notproton-mnc"])
         #expect(tools.first?.tool.flavor == .rosetta)
-    }
-
-    @Test("A named holder keeps the legacy name, and nobody leaves every Preview on its own name")
-    func explicitHolder() throws {
-        let builds = [try build("27.0.0.40921-fex"), try build("27.0.0.40921")]
-        let held = SupportedRunners.tools(for: builds, legacy: .build("27.0.0.40921"))
-        #expect(held.map(\.name) == ["notproton", "notproton-fex", "notproton-fex-rosetta"])
-        #expect(held.first?.build == "27.0.0.40921")
-        let none = SupportedRunners.tools(for: builds, legacy: .nobody)
-        #expect(none.map(\.name) == ["notproton-fex", "notproton-fex-rosetta", "notproton-preview"])
+        #expect(SupportedRunners.toolPreference.first == tools.first?.name)
     }
 
     @Test("Every tool name is one the dylib accepts")
@@ -147,9 +108,10 @@ struct CompatToolOrderTests {
 
     @Test("The list file has one tab-separated line per tool")
     func contents() throws {
-        let tools = SupportedRunners.tools(for: [try build("26.3.0.39832")])
+        let build = SupportedRunners.all[0]
+        let tools = SupportedRunners.tools(for: [build])
         #expect(CompatToolList.contents(tools)
-            == "notproton-26.3\t26.3.0.39832\trosetta\tCrossOver 26.3\n")
+            == "notproton-mnc\t\(build.id)\trosetta\tMnC Wine 11.18\n")
     }
 }
 

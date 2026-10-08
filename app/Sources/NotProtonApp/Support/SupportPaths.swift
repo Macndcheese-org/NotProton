@@ -42,16 +42,25 @@ enum SupportPaths {
     // Read by the dylib at Steam launch, in np_compat_load_tool_list.
     static var toolList: URL { support.appending(path: "tools") }
 
+    static let runnerPrefix = "mnc-"
+
     static func runnerRoot(forBuild build: String, runners: URL = SupportPaths.runners) -> URL {
-        runners.appending(path: "crossover-\(build)")
+        runners.appending(path: "\(runnerPrefix)\(build)")
     }
 
-    static func crossOverRoot(inBundle bundle: URL) -> URL {
-        bundle.appending(path: "Contents/SharedSupport/CrossOver")
-    }
-
+    // The unpacked MnC Wine build tree.
     static func clonedRoot(forBuild build: String, runners: URL = SupportPaths.runners) -> URL {
-        runnerRoot(forBuild: build, runners: runners).appending(path: "CrossOver")
+        runnerRoot(forBuild: build, runners: runners).appending(path: "wine")
+    }
+
+    // Where a fresh download of the release lands.
+    static var defaultArchive: URL {
+        home.appending(path: "Downloads/wine-unified-osx64.tar.xz")
+    }
+
+    // MacNdCheese's own copies of the x86_64 libraries the engine loads at runtime.
+    static var macNCheeseDeps: URL {
+        applicationSupport.appending(path: "MacNCheese/deps")
     }
 
     static func prefixTemplates(forBuild build: String, in library: SteamLibrary) -> [URL] {
@@ -59,7 +68,7 @@ enum SupportPaths {
     }
 
     static func prefixTemplate(forBuild build: String, flavor: CompatTool.Flavor, in library: SteamLibrary) -> URL {
-        library.compatdata.appending(path: prefixTemplateFolder).appending(path: "crossover-\(build)-\(flavor.unixDir)")
+        library.compatdata.appending(path: prefixTemplateFolder).appending(path: "\(runnerPrefix)\(build)-\(flavor.unixDir)")
     }
 
     static let prefixTemplateFolder = "notproton-template"

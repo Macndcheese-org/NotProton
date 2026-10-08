@@ -1,4 +1,4 @@
-// Checks CrossOver state for status display
+// Checks the state of the installed MnC Wine runners for status display
 
 import Foundation
 
@@ -44,8 +44,8 @@ enum RunnerStore {
         let entries = (try? fm.contentsOfDirectory(at: runners, includingPropertiesForKeys: nil)) ?? []
         return entries
             .map(\.lastPathComponent)
-            .filter { $0.hasPrefix("crossover-") }
-            .map { String($0.dropFirst("crossover-".count)) }
+            .filter { $0.hasPrefix(SupportPaths.runnerPrefix) }
+            .map { String($0.dropFirst(SupportPaths.runnerPrefix.count)) }
             .sorted()
     }
 
@@ -109,7 +109,7 @@ enum CompatToolList {
     }
 
     // 1.0.x used the single 'notproton' tool name and wrote no tool list, so the
-    // runners/current symlink is the record of which version of CrossOver was deployed.
+    // runners/current symlink is the record of which build was deployed.
     static func legacyHolder(
         builds: [RunnerBuild], listed: String?, runners: URL = SupportPaths.runners
     ) -> SupportedRunners.LegacyHolder {
@@ -122,8 +122,8 @@ enum CompatToolList {
         if !rows.isEmpty { return .nobody }
         let link = runners.appending(path: "current").path(percentEncoded: false)
         if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: link),
-           let id = target.split(separator: "/").first(where: { $0.hasPrefix("crossover-") })
-               .map({ String($0.dropFirst("crossover-".count)) }),
+           let id = target.split(separator: "/").first(where: { $0.hasPrefix(SupportPaths.runnerPrefix) })
+               .map({ String($0.dropFirst(SupportPaths.runnerPrefix.count)) }),
            ids.contains(id), SupportedRunners.legacyHolders.contains(id) {
             return .build(id)
         }

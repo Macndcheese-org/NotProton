@@ -316,16 +316,17 @@ panel-behavior:
 	node $(PANEL_TESTS)/migration.js $(OUT_DIR)/panel-emit && \
 	echo "==> panel behavior: renders as expected, no stale arguments"
 
-CX_ROOT ?= /Applications/CrossOver Preview.app
+# An unpacked MnC Wine build tree, e.g. the runner NotProton installs.
+MNC_ROOT ?= $(wildcard $(HOME)/Library/Application Support/notproton/runners/mnc-*/wine)
 
 ntdll-resolve:
 	@if [ ! -f ntdll-patch/resolve.py ]; then \
 		$(call SKIP,ntdll-resolve,ntdll-patch/resolve.py); exit 0; fi; \
 	if ! python3 -c 'import capstone' >/dev/null 2>&1; then \
 		echo "==> ntdll-resolve: capstone not found, skipped (pip3 install capstone)"; exit 0; fi; \
-	if [ ! -d "$(CX_ROOT)" ]; then \
-		echo "==> ntdll-resolve: $(CX_ROOT) not present, skipped (set CX_ROOT)"; exit 0; fi; \
-	python3 ntdll-patch/resolve.py "$(CX_ROOT)"
+	if [ ! -d "$(MNC_ROOT)" ]; then \
+		echo "==> ntdll-resolve: $(MNC_ROOT) not present, skipped (set MNC_ROOT)"; exit 0; fi; \
+	python3 ntdll-patch/resolve.py "$(MNC_ROOT)"
 
 $(ARM64_DYLIB): $(OBJS)
 	@mkdir -p $(dir $@)

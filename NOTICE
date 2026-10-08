@@ -19,6 +19,12 @@ under the Steamworks SDK license whenever they are used.
 It also compiles against OpenVR and Wine headers, which are BSD-3-Clause and
 LGPL-V2, respectively.
 
+This fork runs games on MnC Wine (https://github.com/Macndcheese-org/wine), which is
+LGPL-2.1, and stages the DXMT (https://github.com/Macndcheese-org/dxmt) and D3DMetal
+libraries that ship inside its release. D3DMetal is part of Apple's Game Porting Toolkit
+and is covered by the license in D3DMetal.framework/Resources/LICENSE. None of these are
+redistributed by NotProton; they are read from the MnC Wine release the user provides.
+
 The app bundle embeds Sparkle, which checks for and installs updates. Sparkle is
 MIT licensed, see
 https://github.com/sparkle-project/Sparkle/blob/2.10.0/LICENSE

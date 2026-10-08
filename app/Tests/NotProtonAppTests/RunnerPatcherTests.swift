@@ -118,57 +118,40 @@ struct RunnerPatcherTests {
         #expect(outcome.wroteNothing)
     }
 
-    // The FEX flavor has only a wine.app in its arm64 directory, and a loader that is not found
-    // never gets the dyld entitlement. Silent at install, it shows up as a game with no dylib.
-    @Test("Loader discovery finds both the bare and the bundled layout")
-    func loaderDiscoveryCoversBothLayouts() throws {
+    // A loader that is not found never gets the dyld entitlement. Silent at install, it shows
+    // up as a game with no dylib.
+    @Test("Loader discovery finds the build tree's loader and nothing else")
+    func loaderDiscoveryFindsTheTreeLoader() throws {
         let fm = FileManager.default
         let root = URL(filePath: NSTemporaryDirectory()).appending(path: "notproton-loaders-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }
 
-        let bundled = root.appending(path: "lib/wine/aarch64-unix/wine.app/Contents/MacOS/wine")
-        let bare = root.appending(path: "lib/wine/x86_64-unix/wine")
-        for file in [bundled, bare] {
-            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: file)
-        }
+        #expect(RunnerPatcher.unixLoaders(in: root).isEmpty)
 
-        // A windows directory alongside them must not be mistaken for a unix loader.
-        let windows = root.appending(path: "lib/wine/x86_64-windows/wine")
+        // A windows builtin named like the loader must not be mistaken for it.
+        let windows = root.appending(path: "dlls/wine/x86_64-windows/wine")
         try fm.createDirectory(at: windows.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: windows)
+        try markClone(root)
 
         // Compared by name rather than by URL, since the temporary directory is reached
         // through a symlink that only one of the two sides resolves.
-        let found = Set(RunnerPatcher.unixLoaders(in: root).map(RunnerPatcher.name(of:)))
-        #expect(found == ["aarch64-unix/wine.app/Contents/MacOS/wine", "x86_64-unix/wine"])
+        #expect(RunnerPatcher.unixLoaders(in: root).map(RunnerPatcher.name(of:)) == ["loader/wine"])
     }
 
-    // The FEX flavor ships both unix directories and RUN_SCRIPT runs the arm64 loader, so
-    // the unix builtin installed anywhere else is one verify_runner reads as missing.
-    @Test("The unix builtin follows the loader RUN_SCRIPT picks")
-    func unixBuiltinFollowsTheLoader() throws {
-        let fm = FileManager.default
-        let root = URL(filePath: NSTemporaryDirectory()).appending(path: "notproton-unixarch-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: root) }
-
-        func write(_ path: String) throws {
-            let file = root.appending(path: path)
-            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: file)
-        }
-
-        try write("lib/wine/x86_64-unix/wine")
+    // The run script stages the bridge's unix builtin under x86_64-unix, so the app installs
+    // the same one into the build tree.
+    @Test("The unix builtin is the x86_64 one, installed beside its module")
+    func unixBuiltinIsX86() throws {
+        let root = URL(filePath: "/R/mnc-11.18-aaaaaaaa/wine")
         #expect(RunnerPatcher.unixArch(in: root) == "x86_64-unix")
 
-        try write("lib/wine/aarch64-unix/wine.app/Contents/MacOS/wine")
-        #expect(RunnerPatcher.unixArch(in: root) == "aarch64-unix")
-
-        #expect(RunnerPatcher.unixArches(in: root) == ["aarch64-unix", "x86_64-unix"])
-
-        let arches = RunnerPatcher.builtins(in: root).map(\.arch)
-        #expect(
-            arches == RunnerPatcher.windowsBuiltins.map(\.arch) + ["aarch64-unix", "x86_64-unix"])
-        #expect(RunnerPatcher.builtins(in: root).allSatisfy { $0.name.hasPrefix("lsteamclient") })
+        let builtins = RunnerPatcher.builtins(in: root)
+        #expect(builtins.map(\.arch) == RunnerPatcher.windowsBuiltins.map(\.arch) + ["x86_64-unix"])
+        #expect(builtins.allSatisfy { $0.name.hasPrefix("lsteamclient") })
+        #expect(RunnerLayout.builtin(in: root, arch: "x86_64-unix", name: "lsteamclient.so")
+            == root.appending(path: "dlls/lsteamclient/lsteamclient.so"))
+        #expect(RunnerLayout.builtin(in: root, arch: "i386-windows", name: "lsteamclient.dll")
+            == root.appending(path: "dlls/lsteamclient/i386-windows/lsteamclient.dll"))
     }
 }

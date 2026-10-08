@@ -6,18 +6,9 @@ import Testing
 @Suite("Preparing an installed build")
 struct RunnerPrepareTests {
 
-    private static let rosetta = SupportedRunners.all.first { $0.id == "27.0.0.40921" }!
-    private static let fex = SupportedRunners.all.first { $0.flavor == "fex" }!
-    private static let release = SupportedRunners.all.first { $0.id == "26.3.0.39832" }!
-    private static let preview41069 = SupportedRunners.all.first { $0.id == "27.0.0.41069" }!
-    private static let fex41069 = SupportedRunners.all.first { $0.id == "27.0.0.41069-fex" }!
-
-    private static let licensed = CrossOverLicense.Status(
-        licensed: true, detail: "CrossOver is activated.", diagnostic: "test"
-    )
-    private static let unlicensed = CrossOverLicense.Status(
-        licensed: false, detail: CrossOverLicense.notActivated, diagnostic: "test"
-    )
+    private static let current = SupportedRunners.all[0]
+    // A clone NotProton no longer supports, which still sits in runners/.
+    private static let orphan = "11.0-00000000"
 
     private static let runScript = Data("#!/bin/sh\n".utf8)
 
@@ -30,11 +21,7 @@ struct RunnerPrepareTests {
         let runners = FileManager.default.temporaryDirectory
             .appending(path: "np-prepare-\(UUID().uuidString)")
         for build in builds {
-            try FileManager.default.createDirectory(
-                at: SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
-                    .appending(path: "lib/wine"),
-                withIntermediateDirectories: true
-            )
+            try markClone(SupportPaths.clonedRoot(forBuild: build.id, runners: runners))
         }
         return runners
     }
@@ -61,7 +48,6 @@ struct RunnerPrepareTests {
         _ build: RunnerBuild,
         runners: URL,
         calls: Calls,
-        license: CrossOverLicense.Status = licensed,
         failPatch: Bool = false
     ) throws -> RunnerSetup.Outcome {
         try RunnerSetup.prepare(
@@ -75,7 +61,6 @@ struct RunnerPrepareTests {
                 try Self.runScript.write(to: script)
                 return script
             },
-            license: { _ in license },
             verify: { _, _ in },
             stage: { build, _, bridge in
                 calls.staged.append(build.id)
@@ -94,35 +79,33 @@ struct RunnerPrepareTests {
         try? String(contentsOf: runners.appending(path: "tools"), encoding: .utf8)
     }
 
-    @Test("Every set-up build is listed as its own tools")
-    func listsEveryBuild() throws {
-        let runners = try makeRunners(cloning: [Self.release, Self.fex])
+    @Test("The set-up build is listed as its tool")
+    func listsTheBuild() throws {
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
 
         let calls = Calls()
-        let outcome = try prepare(Self.release, runners: runners, calls: calls)
+        let outcome = try prepare(Self.current, runners: runners, calls: calls)
 
         #expect(outcome.toolsChanged)
-        #expect(calls.staged == [Self.release.id])
-        #expect(calls.patched == [Self.release.id])
-        #expect(toolList(runners) == CompatToolList.contents(
-            SupportedRunners.tools(for: [Self.release, Self.fex])
-        ))
-        #expect(toolList(runners)?.hasPrefix("notproton-fex\t27.0.0.40921-fex\tfex\t") == true)
+        #expect(calls.staged == [Self.current.id])
+        #expect(calls.patched == [Self.current.id])
+        #expect(toolList(runners) == CompatToolList.contents(SupportedRunners.tools(for: [Self.current])))
+        #expect(toolList(runners)?.hasPrefix("notproton-mnc\t\(Self.current.id)\trosetta\t") == true)
 
-        let again = try prepare(Self.release, runners: runners, calls: calls)
+        let again = try prepare(Self.current, runners: runners, calls: calls)
         #expect(!again.toolsChanged)
     }
 
     @Test("Every listed tool gets a run script")
     func writesMissingRunScripts() throws {
-        let runners = try makeRunners(cloning: [Self.release, Self.fex])
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        _ = try prepare(Self.release, runners: runners, calls: Calls())
+        _ = try prepare(Self.current, runners: runners, calls: Calls())
 
         let tools = CompatToolList.installed(runners: runners, file: runners.appending(path: "tools"))
-        #expect(tools.count > 1)
+        #expect(!tools.isEmpty)
         for tool in tools {
             let run = runners.appending(path: "compatibilitytools.d/\(tool.name)/run")
             #expect(try Data(contentsOf: run) == Self.runScript)
@@ -132,66 +115,46 @@ struct RunnerPrepareTests {
 
     @Test("A tool's existing run script is left alone")
     func keepsExistingRunScript() throws {
-        let runners = try makeRunners(cloning: [Self.release])
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
-        let tool = SupportedRunners.tools(for: [Self.release])[0].name
+        let tool = SupportedRunners.tools(for: [Self.current])[0].name
         let run = runners.appending(path: "compatibilitytools.d/\(tool)/run")
-        let old = Data("#!/bin/sh\nexec runners/current\n".utf8)
+        let old = Data("#!/bin/sh\nexec old\n".utf8)
         try atomicReplace(run, with: old, step: "test")
 
-        _ = try prepare(Self.release, runners: runners, calls: Calls())
+        _ = try prepare(Self.current, runners: runners, calls: Calls())
 
         #expect(try Data(contentsOf: run) == old)
     }
 
-    @Test("Preparing one build leaves another build's staged copies alone")
-    func keepsOtherBuildsStaged() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta, Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        let bridge = runners.appending(path: "bridge")
-        try Self.writeStaged(for: Self.rosetta, into: bridge)
-        let before = Self.staged(Self.rosetta, in: bridge)
-
-        _ = try prepare(Self.fex, runners: runners, calls: Calls())
-
-        #expect(Self.staged(Self.rosetta, in: bridge) == before)
-        #expect(Self.staged(Self.fex, in: bridge).count == Self.fex.patchedNtdll.count)
-    }
-
     @Test("A failed patch leaves the tool list as it was")
     func failedPatchKeepsList() throws {
-        let runners = try makeRunners(cloning: [Self.fex])
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
 
         #expect(throws: StepFailure.self) {
-            try prepare(Self.fex, runners: runners, calls: Calls(), failPatch: true)
+            try prepare(Self.current, runners: runners, calls: Calls(), failPatch: true)
         }
         #expect(toolList(runners) == nil)
     }
 
-    @Test("Copies and links left by the single-build layout are cleared")
-    func clearsLegacyLayout() throws {
-        let runners = try makeRunners(cloning: [Self.fex])
+    @Test("Staged copies of builds no longer set up are cleared")
+    func clearsGoneBuildsStaged() throws {
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
         let bridge = runners.appending(path: "bridge")
         let legacy = bridge.appending(path: "wine/x86_64-windows/ntdll.dll")
-        let gone = NtdllPatcher.stagedCopy(of: .x86_64Windows, build: Self.rosetta.id, in: bridge)
+        let gone = NtdllPatcher.stagedCopy(of: .x86_64Windows, build: Self.orphan, in: bridge)
         for file in [legacy, gone] {
             try atomicReplace(file, with: Data("old".utf8), step: "test")
         }
-        try FileManager.default.createSymbolicLink(
-            atPath: runners.appending(path: "current").path(percentEncoded: false),
-            withDestinationPath: "crossover-\(Self.fex.id)/CrossOver"
-        )
 
-        _ = try prepare(Self.fex, runners: runners, calls: Calls())
+        _ = try prepare(Self.current, runners: runners, calls: Calls())
 
         let fm = FileManager.default
         #expect(!fm.fileExists(atPath: legacy.deletingLastPathComponent().path(percentEncoded: false)))
         #expect(!fm.fileExists(atPath: gone.path(percentEncoded: false)))
-        #expect((try? fm.destinationOfSymbolicLink(
-            atPath: runners.appending(path: "current").path(percentEncoded: false))) == nil)
-        #expect(Self.staged(Self.fex, in: bridge).count == Self.fex.patchedNtdll.count)
+        #expect(Self.staged(Self.current, in: bridge).count == Self.current.patchedNtdll.count)
     }
 
     @Test("With nothing set up and no list yet, no list is written")
@@ -210,132 +173,31 @@ struct RunnerPrepareTests {
             atPath: file.deletingLastPathComponent().path(percentEncoded: false)))
     }
 
-    private func sync(_ runners: URL) throws {
+    @Test("No MnC Wine build takes the 1.0 'notproton' name")
+    func noLegacyName() throws {
+        let runners = try makeRunners(cloning: [Self.current])
+        defer { try? FileManager.default.removeItem(at: runners) }
+        try FileManager.default.createSymbolicLink(
+            atPath: runners.appending(path: "current").path(percentEncoded: false),
+            withDestinationPath: "mnc-\(Self.current.id)/wine"
+        )
+
         try CompatToolList.sync(
             runners: runners, bridge: runners.appending(path: "bridge"), file: runners.appending(path: "tools"),
             compatTools: runners.appending(path: "compatibilitytools.d")
         )
-    }
-
-    private func holder(_ runners: URL) -> String? {
-        toolList(runners)?.split(separator: "\n").map { $0.split(separator: "\t") }
-            .first { $0.first == "notproton" }.map { String($0[1]) }
-    }
-
-    @Test("A 1.0 install keeps the legacy name on the build runners/current pointed at")
-    func legacyNameFollowsCurrent() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta, Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        let current = runners.appending(path: "current").path(percentEncoded: false)
-        try FileManager.default.createSymbolicLink(
-            atPath: current, withDestinationPath: "crossover-\(Self.rosetta.id)/CrossOver"
-        )
-
-        try sync(runners)
-        #expect(holder(runners) == Self.rosetta.id)
-        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: current)) == nil)
-
-        try sync(runners)
-        #expect(holder(runners) == Self.rosetta.id)
-        #expect(toolList(runners)?.contains("notproton-fex\t\(Self.fex.id)\tfex\t") == true)
-    }
-
-    @Test("Setting up a second Preview leaves the legacy name where it is")
-    func secondPreviewRenamesNothing() throws {
-        let runners = try makeRunners(cloning: [Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        try FileManager.default.createSymbolicLink(
-            atPath: runners.appending(path: "current").path(percentEncoded: false),
-            withDestinationPath: "crossover-\(Self.fex.id)/CrossOver"
-        )
-        try sync(runners)
-        #expect(holder(runners) == Self.fex.id)
-
-        try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: Self.rosetta.id, runners: runners).appending(path: "lib/wine"),
-            withIntermediateDirectories: true
-        )
-        try sync(runners)
-        #expect(holder(runners) == Self.fex.id)
-        #expect(toolList(runners)?.contains("notproton-preview\t\(Self.rosetta.id)\t") == true)
-        #expect(toolList(runners)?.contains("notproton-fex-rosetta\t\(Self.fex.id)\t") == true)
-    }
-
-    @Test("A fresh install gives the legacy name to nobody")
-    func freshInstallHasNoLegacyName() throws {
-        let runners = try makeRunners(cloning: [Self.preview41069, Self.fex41069])
-        defer { try? FileManager.default.removeItem(at: runners) }
-
-        try sync(runners)
-        #expect(holder(runners) == nil)
-        #expect(toolList(runners)?.hasPrefix("notproton-fex-41069\t\(Self.fex41069.id)\tfex\t") == true)
-        #expect(toolList(runners)?.contains("notproton-preview-41069\t\(Self.preview41069.id)\t") == true)
-    }
-
-    @Test("A 1.0.3 install keeps the legacy name on 41069")
-    func legacyNameFollows41069() throws {
-        let runners = try makeRunners(cloning: [Self.preview41069, Self.fex41069])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        try FileManager.default.createSymbolicLink(
-            atPath: runners.appending(path: "current").path(percentEncoded: false),
-            withDestinationPath: "crossover-\(Self.preview41069.id)/CrossOver"
-        )
-
-        try sync(runners)
-        #expect(holder(runners) == Self.preview41069.id)
-        try sync(runners)
-        #expect(holder(runners) == Self.preview41069.id)
-        #expect(toolList(runners)?.contains("notproton-fex-41069\t\(Self.fex41069.id)\tfex\t") == true)
-    }
-
-    @Test("A Preview listed under its own name does not take the legacy name later")
-    func ownNameSticks() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta, Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        try CompatToolList.contents(SupportedRunners.tools(for: [Self.rosetta, Self.fex], legacy: .nobody))
-            .write(to: runners.appending(path: "tools"), atomically: true, encoding: .utf8)
-
-        try sync(runners)
-        #expect(holder(runners) == nil)
-    }
-
-    @Test("The single-build layout stays while Steam still runs a tool that reads it")
-    func keepsLegacyLayoutForOldRunScript() throws {
-        let runners = try makeRunners(cloning: [Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-        let bridge = runners.appending(path: "bridge")
-        let legacy = bridge.appending(path: "wine/x86_64-windows/ntdll.dll")
-        try atomicReplace(legacy, with: Data("old".utf8), step: "test")
-        let current = runners.appending(path: "current").path(percentEncoded: false)
-        try FileManager.default.createSymbolicLink(
-            atPath: current, withDestinationPath: "crossover-\(Self.fex.id)/CrossOver"
-        )
-        let run = runners.appending(path: "compatibilitytools.d/notproton/run")
-        try atomicReplace(
-            run, with: Data("CX_ROOT=\"$HOME/Library/Application Support/notproton/runners/current\"\n".utf8),
-            step: "test"
-        )
-
-        _ = try prepare(Self.fex, runners: runners, calls: Calls())
-
-        let fm = FileManager.default
-        #expect(fm.fileExists(atPath: legacy.path(percentEncoded: false)))
-        #expect((try? fm.destinationOfSymbolicLink(atPath: current)) != nil)
-
-        try atomicReplace(run, with: Data("CX_ROOT=\"$np_support/runners/crossover-$np_build\"\n".utf8), step: "test")
-        _ = try prepare(Self.fex, runners: runners, calls: Calls())
-        #expect(!fm.fileExists(atPath: legacy.path(percentEncoded: false)))
-        #expect((try? fm.destinationOfSymbolicLink(atPath: current)) == nil)
+        let names = toolList(runners)?.split(separator: "\n").map { $0.split(separator: "\t")[0] } ?? []
+        #expect(names == ["notproton-mnc"])
     }
 
     @Test("A build with no clone is refused without touching anything")
     func refusesMissingClone() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta])
+        let runners = try makeRunners(cloning: [])
         defer { try? FileManager.default.removeItem(at: runners) }
 
         let calls = Calls()
         let failure = try #require(throws: StepFailure.self) {
-            try prepare(Self.fex, runners: runners, calls: calls)
+            try prepare(Self.current, runners: runners, calls: calls)
         }
 
         #expect(failure.detail.contains("has not been set up"))
@@ -343,151 +205,100 @@ struct RunnerPrepareTests {
         #expect(toolList(runners) == nil)
     }
 
-    @Test("Preparing is refused when CrossOver is not activated")
-    func refusesUnlicensed() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta, Self.fex])
-        defer { try? FileManager.default.removeItem(at: runners) }
-
-        let calls = Calls()
-        #expect(throws: StepFailure.self) {
-            try prepare(Self.fex, runners: runners, calls: calls, license: Self.unlicensed)
-        }
-
-        #expect(calls.staged.isEmpty)
-        #expect(toolList(runners) == nil)
-    }
-
-    @Test("Installed builds are supported clones that still have their payload")
+    @Test("Installed builds are supported clones that still have their loader")
     func installedBuildsListing() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta, Self.fex])
+        let runners = try makeRunners(cloning: [Self.current])
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: "1.0.0.1", runners: runners)
-                .appending(path: "lib/wine"),
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.removeItem(
-            at: SupportPaths.clonedRoot(forBuild: Self.fex.id, runners: runners)
-        )
+        try markClone(SupportPaths.clonedRoot(forBuild: Self.orphan, runners: runners))
 
-        #expect(RunnerStore.installedBuilds(in: runners) == [Self.rosetta])
+        #expect(RunnerStore.installedBuilds(in: runners) == [Self.current])
+        try FileManager.default.removeItem(
+            at: RunnerLayout.loader(in: SupportPaths.clonedRoot(forBuild: Self.current.id, runners: runners))
+        )
+        #expect(RunnerStore.installedBuilds(in: runners).isEmpty)
     }
 }
 
 @MainActor
-@Suite("Choosing which CrossOver to set up from")
+@Suite("Choosing which tarball to set up from")
 struct SetupSourceTests {
 
-    private func install(_ name: String, _ build: RunnerBuild) -> CrossOverInstall {
-        CrossOverInstall(
-            bundle: URL(filePath: "/Applications/\(name).app"),
-            releaseVersion: build.releaseVersion,
-            support: .supported(build)
-        )
+    private static let current = SupportedRunners.all[0]
+    private static let next = RunnerBuild(
+        bundleVersion: "11.19-bbbbbbbb", releaseVersion: "11.19", flavor: nil,
+        loaderSHA256: "", cleanNtdll: [:], patchedNtdll: [:]
+    )
+
+    private func archive(_ name: String, _ build: RunnerBuild) -> WineArchive {
+        WineArchive(file: URL(filePath: "/Users/me/Downloads/\(name)"), support: .supported(build))
     }
 
-    private func status(runner: RunnerState, installs: [CrossOverInstall]) -> SystemStatus {
+    private func status(runner: RunnerState, archives: [WineArchive]) -> SystemStatus {
         let status = SystemStatus()
         status.snapshot = StatusSnapshot(
             steam: .steamMissing,
             steamRunning: false,
             updateBlocked: false,
-            crossOver: installs,
-            crossOverLicense: [:],
+            archives: archives,
             runner: runner,
             payload: PayloadInspector.inspect(bridge: FileManager.default.temporaryDirectory, builds: [])
         )
         return status
     }
 
-    @Test("A recopy comes from the install a set-up build was cloned from")
+    @Test("A reinstall comes from the tarball a set-up build was unpacked from")
     func prefersInstalledBuild() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let fex = install("CrossOver FEX", SupportedRunners.all[1])
+        let current = archive("wine-unified-a.tar.xz", Self.current)
+        let next = archive("wine-unified-b.tar.xz", Self.next)
 
-        let status = status(
-            runner: .ready(builds: [SupportedRunners.all[1].id]),
-            installs: [rosetta, fex]
-        )
+        let status = status(runner: .ready(builds: [Self.next.id]), archives: [current, next])
 
-        #expect(status.setupSource?.id == fex.id)
+        #expect(status.setupSource?.id == next.id)
     }
 
-    @Test("With no tool set up, the preferred install is used")
+    @Test("With no tool set up, the preferred tarball is used")
     func fallsBackToPreferred() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let fex = install("CrossOver FEX", SupportedRunners.all[1])
+        let current = archive("wine-unified-a.tar.xz", Self.current)
+        let next = archive("wine-unified-b.tar.xz", Self.next)
 
-        let status = status(runner: .none, installs: [rosetta, fex])
+        let status = status(runner: .none, archives: [current, next])
 
-        #expect(status.setupSource?.id == rosetta.id)
-        #expect(status.usableCrossOvers.map(\.id) == [rosetta.id, fex.id])
+        #expect(status.setupSource?.id == current.id)
+        #expect(status.usableArchives.map(\.id) == [current.id, next.id])
     }
 
-    @Test("An install matching a set-up build can repair it")
-    func repairSourceMatchesInstalledBuild() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let status = status(
-            runner: .ready(builds: [SupportedRunners.all[0].id]),
-            installs: [rosetta]
-        )
-        status.snapshot?.installedRunners = [SupportedRunners.all[0]]
-
-        #expect(status.repairSource?.id == rosetta.id)
-    }
-
-    @Test("An install offering another build cannot repair a set-up one")
+    @Test("A tarball of another build cannot repair a set-up one")
     func repairSourceIsNilWhenBuildDiffers() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let status = status(
-            runner: .ready(builds: [SupportedRunners.all[1].id]),
-            installs: [rosetta]
-        )
-        status.snapshot?.installedRunners = [SupportedRunners.all[1]]
+        let current = archive("wine-unified-a.tar.xz", Self.current)
+        let status = status(runner: .ready(builds: [Self.next.id]), archives: [current])
 
         #expect(status.repairSource == nil)
-        #expect(status.setupSource?.id == rosetta.id)
-    }
-
-    @Test("With every build on disk, a repair comes from the set-up build's install")
-    func repairSourceWithEveryBuildCopied() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let fex = install("CrossOver FEX", SupportedRunners.all[1])
-        let status = status(
-            runner: .ready(builds: [SupportedRunners.all[1].id]),
-            installs: [rosetta, fex]
-        )
-        status.snapshot?.installedRunners = SupportedRunners.all
-
-        #expect(status.repairSource?.id == fex.id)
+        #expect(status.setupSource?.id == current.id)
     }
 
     @Test("With nothing set up there is no repair source")
     func noRepairSourceBeforeFirstSetUp() {
-        let rosetta = install("CrossOver", SupportedRunners.all[0])
-        let status = status(runner: .none, installs: [rosetta])
+        let current = archive("wine-unified-a.tar.xz", Self.current)
+        let status = status(runner: .none, archives: [current])
 
         #expect(status.repairSource == nil)
-        #expect(status.setupSource?.id == rosetta.id)
+        #expect(status.setupSource?.id == current.id)
     }
 }
 
 @Suite("Removing an installed build")
 struct RunnerRemovalTests {
 
-    private static let rosetta = SupportedRunners.all.first { $0.flavor == nil }!
-    private static let fex = SupportedRunners.all.first { $0.flavor == "fex" }!
+    // The supported build, and a clone of one NotProton no longer knows.
+    private static let rosetta = SupportedRunners.all[0]
+    private static let fexID = "11.0-00000000"
 
     private func makeRunners(cloning builds: [String]) throws -> URL {
         let runners = FileManager.default.temporaryDirectory
             .appending(path: "np-remove-\(UUID().uuidString)")
         for build in builds {
-            try FileManager.default.createDirectory(
-                at: SupportPaths.clonedRoot(forBuild: build, runners: runners)
-                    .appending(path: "lib/wine"),
-                withIntermediateDirectories: true
-            )
+            try markClone(SupportPaths.clonedRoot(forBuild: build, runners: runners))
         }
         return runners
     }
@@ -506,10 +317,10 @@ struct RunnerRemovalTests {
 
     @Test("Removing a build leaves nothing of it in the runners folder")
     func removalLeavesNothing() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fex.id])
+        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])
         defer { try? FileManager.default.removeItem(at: runners) }
         let fm = FileManager.default
-        let leftover = runners.appending(path: ".crossover-\(Self.rosetta.id).removing/CrossOver")
+        let leftover = runners.appending(path: ".mnc-\(Self.rosetta.id).removing/wine")
         try fm.createDirectory(at: leftover, withIntermediateDirectories: true)
 
         _ = try remove(Self.rosetta.id, runners: runners)
@@ -517,7 +328,7 @@ struct RunnerRemovalTests {
         let left = try fm.contentsOfDirectory(atPath: runners.path(percentEncoded: false))
             .filter { $0.contains(Self.rosetta.id) }
         #expect(left.isEmpty)
-        #expect(RunnerStore.clonedBuilds(in: runners) == [Self.fex.id])
+        #expect(RunnerStore.clonedBuilds(in: runners) == [Self.fexID])
     }
 
     @Test("Removing a build also clears what an earlier failed removal of another build left")
@@ -525,7 +336,7 @@ struct RunnerRemovalTests {
         let runners = try makeRunners(cloning: [Self.rosetta.id])
         defer { try? FileManager.default.removeItem(at: runners) }
         let fm = FileManager.default
-        let leftover = runners.appending(path: ".crossover-\(Self.fex.id).removing/CrossOver")
+        let leftover = runners.appending(path: ".mnc-\(Self.fexID).removing/wine")
         try fm.createDirectory(at: leftover, withIntermediateDirectories: true)
 
         _ = try remove(Self.rosetta.id, runners: runners)
@@ -536,10 +347,14 @@ struct RunnerRemovalTests {
 
     @Test("A removal whose tool list cannot be written puts the build back")
     func failedSyncRestoresBuild() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fex.id])
+        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])
         defer { try? FileManager.default.removeItem(at: runners) }
         let fm = FileManager.default
-        try fm.createDirectory(at: runners.appending(path: "tools/blocked"), withIntermediateDirectories: true)
+        // A list the removal has to rewrite, held so the rewrite fails.
+        let list = runners.appending(path: "tools")
+        try Data("stale\n".utf8).write(to: list)
+        try fm.setAttributes([.immutable: true], ofItemAtPath: list.path(percentEncoded: false))
+        defer { try? fm.setAttributes([.immutable: false], ofItemAtPath: list.path(percentEncoded: false)) }
         let staged = runners.appending(path: "bridge/wine/\(Self.rosetta.id)/x86_64-windows/ntdll.dll")
         try fm.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("patched".utf8).write(to: staged)
@@ -547,7 +362,7 @@ struct RunnerRemovalTests {
         #expect(throws: (any Error).self) { try remove(Self.rosetta.id, runners: runners) }
         #expect(fm.fileExists(atPath: staged.path(percentEncoded: false)))
 
-        #expect(RunnerStore.clonedBuilds(in: runners) == [Self.fex.id, Self.rosetta.id].sorted())
+        #expect(RunnerStore.clonedBuilds(in: runners) == [Self.fexID, Self.rosetta.id].sorted())
         #expect(RunnerInstaller.hasClone(forBuild: Self.rosetta.id, runners: runners))
         #expect(try fm.contentsOfDirectory(atPath: runners.path(percentEncoded: false))
             .filter { $0.hasSuffix(".removing") }.isEmpty)
@@ -555,14 +370,14 @@ struct RunnerRemovalTests {
 
     @Test("Removing a build deletes its prefix templates in every library and keeps the others")
     func removesThatBuildsTemplates() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fex.id])
+        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])
         defer { try? FileManager.default.removeItem(at: runners) }
         let fm = FileManager.default
         let libraries = ["internal", "external"].map {
             SteamLibrary(root: runners.appending(path: "libraries/\($0)"))
         }
         for library in libraries {
-            for build in [Self.rosetta.id, Self.fex.id] {
+            for build in [Self.rosetta.id, Self.fexID] {
                 for template in SupportPaths.prefixTemplates(forBuild: build, in: library) {
                     try fm.createDirectory(
                         at: template.appending(path: "pfx/drive_c"), withIntermediateDirectories: true)
@@ -577,18 +392,18 @@ struct RunnerRemovalTests {
                 atPath: library.compatdata.appending(path: SupportPaths.prefixTemplateFolder)
                     .path(percentEncoded: false)
             ).sorted()
-            #expect(left == SupportPaths.prefixTemplates(forBuild: Self.fex.id, in: library)
+            #expect(left == SupportPaths.prefixTemplates(forBuild: Self.fexID, in: library)
                 .map(\.lastPathComponent).sorted())
         }
     }
 
     @Test("Removing a build also clears templates left by builds removed while their drive was away")
     func removesTemplatesOfBuildsAlreadyGone() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fex.id])
+        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])
         defer { try? FileManager.default.removeItem(at: runners) }
         let fm = FileManager.default
         let library = SteamLibrary(root: runners.appending(path: "libraries/external"))
-        let gone = SupportPaths.prefixTemplates(forBuild: "26.3.0.39832", in: library)
+        let gone = SupportPaths.prefixTemplates(forBuild: "10.0-gone", in: library)
         for template in gone {
             try fm.createDirectory(at: template.appending(path: "pfx"), withIntermediateDirectories: true)
         }
@@ -611,10 +426,10 @@ struct RunnerRemovalTests {
         let template = script.split(separator: "\n").first { $0.contains("template_dir=\"") }
         #expect(template?.contains("template_dir=\"$template_cache/$runner_id\"") == true)
         let names = ["x86_64-unix", "aarch64-unix"].map { arch in
-            expression.replacingOccurrences(of: "$np_build", with: "27.0.0.40921-fex")
-                .replacingOccurrences(of: "${wine_unix##*/}", with: arch)
+            expression.replacingOccurrences(of: "$np_build", with: "11.18-aaaaaaaa")
+                .replacingOccurrences(of: "$wine_unix_arch", with: arch)
         }
-        #expect(SupportPaths.prefixTemplates(forBuild: "27.0.0.40921-fex", in: library).map(\.path)
+        #expect(SupportPaths.prefixTemplates(forBuild: "11.18-aaaaaaaa", in: library).map(\.path)
             == names.map { library.compatdata.appending(path: SupportPaths.prefixTemplateFolder).appending(path: $0).path })
     }
 
@@ -636,28 +451,28 @@ struct RunnerRemovalTests {
         try """
             #!/bin/sh
             echo "/launchd"
-            echo "/R/crossover-26.3.0.39832/CrossOver/CrossOver-Hosted Application/wineserver"
+            echo "/R/mnc-11.18-aaaaaaaa/wine/server/wineserver"
             """.write(to: ps, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ps.path(percentEncoded: false))
         let path = ps.path(percentEncoded: false)
 
-        #expect(RunnerInstaller.isRunning(from: URL(filePath: "/R/crossover-26.3.0.39832"), ps: path))
-        #expect(!RunnerInstaller.isRunning(from: URL(filePath: "/R/crossover-26.3.0"), ps: path))
-        #expect(!RunnerInstaller.isRunning(from: URL(filePath: "/R/crossover-27.0.0.40921"), ps: path))
+        #expect(RunnerInstaller.isRunning(from: URL(filePath: "/R/mnc-11.18-aaaaaaaa"), ps: path))
+        #expect(!RunnerInstaller.isRunning(from: URL(filePath: "/R/mnc-11.18"), ps: path))
+        #expect(!RunnerInstaller.isRunning(from: URL(filePath: "/R/mnc-11.19-bbbbbbbb"), ps: path))
         #expect(RunnerInstaller.isRunning(from: URL(filePath: "/R/x"), ps: "/nonexistent/ps"))
     }
 
     @Test("Any build can be removed, and its tools and staged copies go with it")
     func removesBuild() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fex.id])
+        let runners = try makeRunners(cloning: [Self.rosetta.id, Self.fexID])
         defer { try? FileManager.default.removeItem(at: runners) }
         let bridge = runners.appending(path: "bridge")
-        let staged = NtdllPatcher.stagedCopy(of: .x86_64Windows, build: Self.fex.id, in: bridge)
+        let staged = NtdllPatcher.stagedCopy(of: .x86_64Windows, build: Self.fexID, in: bridge)
         try atomicReplace(staged, with: Data("fex".utf8), step: "test")
 
-        #expect(try remove(Self.fex.id, runners: runners))
+        #expect(try remove(Self.fexID, runners: runners))
 
-        #expect(!RunnerInstaller.hasClone(forBuild: Self.fex.id, runners: runners))
+        #expect(!RunnerInstaller.hasClone(forBuild: Self.fexID, runners: runners))
         #expect(RunnerInstaller.hasClone(forBuild: Self.rosetta.id, runners: runners))
         #expect(!FileManager.default.fileExists(atPath: staged.path(percentEncoded: false)))
         let list = try String(contentsOf: runners.appending(path: "tools"), encoding: .utf8)
@@ -673,23 +488,23 @@ struct RunnerRemovalTests {
         defer { try? FileManager.default.removeItem(at: runners) }
 
         #expect(throws: StepFailure.self) {
-            try remove(Self.fex.id, runners: runners)
+            try remove(Self.fexID, runners: runners)
         }
     }
 
-    @Test("A supported build whose payload never finished copying is listed as damaged")
+    @Test("A supported build whose tree never finished unpacking is listed as damaged")
     func damagedCloneIsListed() throws {
-        let runners = try makeRunners(cloning: [Self.rosetta.id])
+        let runners = try makeRunners(cloning: [])
         defer { try? FileManager.default.removeItem(at: runners) }
 
         try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: Self.fex.id, runners: runners),
+            at: SupportPaths.clonedRoot(forBuild: Self.rosetta.id, runners: runners),
             withIntermediateDirectories: true
         )
 
-        #expect(RunnerStore.damagedClones(in: runners) == [Self.fex.id])
+        #expect(RunnerStore.damagedClones(in: runners) == [Self.rosetta.id])
         #expect(RunnerStore.orphanedClones(in: runners).isEmpty)
-        #expect(RunnerStore.installedBuilds(in: runners).map(\.id) == [Self.rosetta.id])
+        #expect(RunnerStore.installedBuilds(in: runners).isEmpty)
     }
 
     @Test("Every clone on disk lands in exactly one of the three lists")
@@ -698,7 +513,7 @@ struct RunnerRemovalTests {
         defer { try? FileManager.default.removeItem(at: runners) }
 
         try FileManager.default.createDirectory(
-            at: SupportPaths.clonedRoot(forBuild: Self.fex.id, runners: runners),
+            at: SupportPaths.clonedRoot(forBuild: Self.fexID, runners: runners),
             withIntermediateDirectories: true
         )
 
@@ -736,7 +551,7 @@ struct RunnerRemovalTests {
         let runners = try makeRunners(cloning: [Self.rosetta.id])
         defer { try? FileManager.default.removeItem(at: runners) }
         let file = SupportPaths.clonedRoot(forBuild: Self.rosetta.id, runners: runners)
-            .appending(path: "lib/wine/blob")
+            .appending(path: "loader/blob")
         try Data(repeating: 0, count: 64 * 1024).write(to: file)
 
         #expect(RunnerStore.cloneSize(forBuild: Self.rosetta.id, runners: runners) >= 64 * 1024)

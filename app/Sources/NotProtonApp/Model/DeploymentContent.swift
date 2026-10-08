@@ -134,8 +134,10 @@ enum DeploymentContent {
             for builtin in RunnerPatcher.builtins(in: root) {
                 let path = "\(builtin.arch)/\(builtin.name)"
                 if let entry = bridgePayload.sources.first(where: { $0.bridgePaths.contains(path) }) {
-                    files.append(File(source: entry.source, destination: root.appending(path: "lib/wine/\(path)"),
-                                      name: "crossover-\(build)/\(path)"))
+                    files.append(File(
+                        source: entry.source,
+                        destination: RunnerLayout.builtin(in: root, arch: builtin.arch, name: builtin.name),
+                        name: "\(SupportPaths.runnerPrefix)\(build)/\(path)"))
                 }
             }
         }
@@ -173,9 +175,9 @@ enum DeploymentContent {
         }
         for build in RunnerStore.installedBuilds(in: runners) {
             for (arch, hash) in build.patchedNtdll {
-                let file = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
-                    .appending(path: "lib/wine/\(arch.rawValue)/ntdll.dll")
-                files.append((file, hash, "crossover-\(build.id)/\(arch.rawValue)/ntdll.dll"))
+                let file = RunnerLayout.ntdll(
+                    in: SupportPaths.clonedRoot(forBuild: build.id, runners: runners), arch: arch)
+                files.append((file, hash, "\(SupportPaths.runnerPrefix)\(build.id)/\(arch.rawValue)/ntdll.dll"))
                 files.append((NtdllPatcher.stagedCopy(of: arch, build: build.id, in: bridge), hash,
                               "bridge/wine/\(build.id)/\(arch.rawValue)/ntdll.dll"))
             }

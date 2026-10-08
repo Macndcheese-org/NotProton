@@ -16,9 +16,12 @@ struct RunnerStateTests {
         }
 
         func makeClone(build: String, withWine: Bool = true) throws {
-            let root = runners.appending(path: "crossover-\(build)/CrossOver")
-            let leaf = withWine ? root.appending(path: "lib/wine") : root
-            try FileManager.default.createDirectory(at: leaf, withIntermediateDirectories: true)
+            let root = SupportPaths.clonedRoot(forBuild: build, runners: runners)
+            if withWine {
+                try markClone(root)
+            } else {
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            }
         }
 
         deinit { try? FileManager.default.removeItem(at: runners) }
@@ -52,28 +55,29 @@ struct RunnerStateTests {
             == .unpatched(builds: [version], problems: ["\(version): ntdll is stock"]))
     }
 
-    @Test("Every unpatched clone is reported, not just the first")
-    func reportsEveryUnpatchedClone() throws {
+    @Test("Every problem with an unpatched clone is reported, not just the first")
+    func reportsEveryProblem() throws {
         let fixture = try Fixture()
-        let ids = SupportedRunners.all.prefix(3).map(\.id).sorted()
-        for id in ids { try fixture.makeClone(build: id) }
-        let stock = Set(ids.dropFirst())
+        let version = SupportedRunners.all[0].id
+        try fixture.makeClone(build: version)
 
-        #expect(RunnerStore.state(runners: fixture.runners, verify: { build, _ in
-            stock.contains(build.id) ? ["ntdll is stock"] : []
-        }) == .unpatched(builds: Array(ids.dropFirst()), problems: ids.dropFirst().map { "\($0): ntdll is stock" }))
+        #expect(RunnerStore.state(runners: fixture.runners, verify: { _, _ in
+            ["ntdll is stock", "lsteamclient is missing"]
+        }) == .unpatched(builds: [version], problems: [
+            "\(version): ntdll is stock", "\(version): lsteamclient is missing",
+        ]))
     }
 
     @Test("A clone outside the allow list is orphaned, not ready")
     func reportsUnsupportedClone() throws {
         let fixture = try Fixture()
-        try fixture.makeClone(build: "1.0.0.1")
+        try fixture.makeClone(build: "1.0-00000000")
 
         #expect(RunnerStore.state(runners: fixture.runners) == .none)
-        #expect(RunnerStore.orphanedClones(in: fixture.runners) == ["1.0.0.1"])
+        #expect(RunnerStore.orphanedClones(in: fixture.runners) == ["1.0-00000000"])
     }
 
-    @Test("A supported clone with no lib/wine is damaged, not ready")
+    @Test("A supported clone with no loader is damaged, not ready")
     func detectsIncompleteTree() throws {
         let fixture = try Fixture()
         let version = SupportedRunners.all[0].id
@@ -86,9 +90,9 @@ struct RunnerStateTests {
     @Test("Clones are listed by version")
     func listsClones() throws {
         let fixture = try Fixture()
-        try fixture.makeClone(build: "27.0.0.40921")
-        try fixture.makeClone(build: "26.0.0.1")
+        try fixture.makeClone(build: "11.18-c8fd07a0")
+        try fixture.makeClone(build: "11.0-00000000")
 
-        #expect(RunnerStore.clonedBuilds(in: fixture.runners) == ["26.0.0.1", "27.0.0.40921"])
+        #expect(RunnerStore.clonedBuilds(in: fixture.runners) == ["11.0-00000000", "11.18-c8fd07a0"])
     }
 }

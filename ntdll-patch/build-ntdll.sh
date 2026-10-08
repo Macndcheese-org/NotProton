@@ -1,8 +1,10 @@
 #!/bin/sh
-# Script to apply patches and throw them into the CrossOver setup, testing tool
+# Script to apply patches and throw them into the Wine setup, testing tool
 #
-#   ./build-ntdll.sh            build and verify
-#   ./build-ntdll.sh --install  also copy into the bridge
+#   MNC_ROOT=<MnC Wine build tree> ./build-ntdll.sh            build and verify
+#   MNC_ROOT=<MnC Wine build tree> ./build-ntdll.sh --install  also copy into the bridge
+#
+# Without MNC_ROOT it reads a CrossOver install at CX_ROOT, as the original tool did.
 #
 set -eu
 
@@ -42,6 +44,11 @@ FEX41069_PATCHED_X86_64=7548abd874656f6a6455e7fac659020ed755d92f4e1929a33097bbde
 FEX41069_PATCHED_I386=e16b0199db721a08201b1512476b9eff255624d2faf3696fa57ff74b1a54be5c
 FEX41069_PATCHED_AARCH64=7623c0b33350f511b431d39c7ec0c0d4f5def4183acef0eee5d4a5c694898956
 
+MNC_CLEAN_X86_64=3b3b3cc1359682555013d58c95d483f8d11a6485040ddfe3b9ea0bfdb1a6e1c7
+MNC_CLEAN_I386=85755ffc284d2c7e2ab4695794004d1a7437bbd8b12d9455813004bb87b2943e
+MNC_PATCHED_X86_64=78899bb12971e9feaca652e3c2ad6d7329d569e135c2919c5c18c25f69b2733e
+MNC_PATCHED_I386=6cbf6fa273a04b673c37b05350be5d7cf67ca960c7744bb367a043436d9c4be5
+
 install=0
 [ "${1:-}" = "--install" ] && install=1
 
@@ -52,7 +59,21 @@ command -v python3 >/dev/null || die "python3 not found"
 
 OBJCOPY=/opt/homebrew/opt/llvm/bin/llvm-objcopy
 
+# Where an arch's ntdll sits: an MnC Wine build tree keeps it in its module folder.
+ntdll_dir() {
+    if [ -n "${MNC_ROOT:-}" ]; then
+        echo "$MNC_ROOT/dlls/ntdll/$1"
+    else
+        echo "$CX_ROOT/lib/wine/$1"
+    fi
+}
+
 flavor_of() {
+    for cand in "$(ntdll_dir x86_64-windows)/ntdll.dll.notproton-orig" \
+                "$(ntdll_dir x86_64-windows)/ntdll.dll"; do
+        [ -f "$cand" ] || continue
+        [ "$(sha "$cand")" = "$MNC_CLEAN_X86_64" ] && { echo mnc; return 0; }
+    done
     for cand in "$CX_ROOT/lib/wine/aarch64-windows/ntdll.dll.notproton-orig" \
                 "$CX_ROOT/lib/wine/aarch64-windows/ntdll.dll"; do
         [ -f "$cand" ] || continue
@@ -70,8 +91,8 @@ flavor_of() {
             "$CX26_CLEAN_X86_64")         echo cx26; return 0 ;;
         esac
     done
-    die "no ntdll under $CX_ROOT/lib/wine matches a pinned build
-       pass FLAVOR=rosetta, rosetta-41069, cx26, fex or fex-41069 to choose the pins anyway"
+    die "no ntdll under $(ntdll_dir x86_64-windows) matches a pinned build
+       pass FLAVOR=mnc, rosetta, rosetta-41069, cx26, fex or fex-41069 to choose the pins anyway"
 }
 
 if [ -z "${FLAVOR:-}" ]; then
@@ -79,6 +100,7 @@ if [ -z "${FLAVOR:-}" ]; then
 fi
 
 case "$FLAVOR" in
+    mnc)           tools="x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc"; BUILD=11.18-c8fd07a0 ;;
     rosetta)       tools="x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc"; BUILD=27.0.0.40921 ;;
     rosetta-41069) tools="x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc"; BUILD=27.0.0.41069 ;;
     cx26)          tools="x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc"; BUILD=26.3.0.39832 ;;
@@ -86,7 +108,7 @@ case "$FLAVOR" in
                    BUILD=27.0.0.40921-fex ;;
     fex-41069)     tools="x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc clang ld.lld"
                    BUILD=27.0.0.41069-fex ;;
-    *)             die "unknown flavor $FLAVOR, expected rosetta, rosetta-41069, cx26, fex or fex-41069" ;;
+    *)             die "unknown flavor $FLAVOR, expected mnc, rosetta, rosetta-41069, cx26, fex or fex-41069" ;;
 esac
 
 for t in $tools; do
@@ -97,18 +119,18 @@ if [ "${FLAVOR%-41069}" = fex ] && [ ! -x "$OBJCOPY" ]; then
     die "$OBJCOPY not found (brew install llvm)"
 fi
 
-echo "==> $FLAVOR flavor, reading $CX_ROOT/lib/wine"
+echo "==> $FLAVOR flavor, reading $(ntdll_dir '<arch>')"
 
 clean_for() {
     arch="$1"; want="$2"
-    for cand in "$CX_ROOT/lib/wine/$arch/ntdll.dll.notproton-orig" \
-                "$CX_ROOT/lib/wine/$arch/ntdll.dll"; do
+    for cand in "$(ntdll_dir "$arch")/ntdll.dll.notproton-orig" \
+                "$(ntdll_dir "$arch")/ntdll.dll"; do
         [ -f "$cand" ] || continue
         [ "$(sha "$cand")" = "$want" ] || continue
         echo "$cand"
         return 0
     done
-    die "no clean $arch ntdll.dll found under $CX_ROOT/lib/wine/$arch
+    die "no clean $arch ntdll.dll found under $(ntdll_dir "$arch")
        expected sha256 $want
        extract a clean ntdll.dll from the CrossOver installer and point CX_ROOT at it"
 }
@@ -131,6 +153,13 @@ patch_one() {
 }
 
 case "$FLAVOR" in
+    mnc)
+        ARCHES="x86_64-windows i386-windows"
+        patch_one x86_64-windows build.sh   mnc detour2-mnc.bin \
+            "$MNC_CLEAN_X86_64" "$MNC_PATCHED_X86_64"
+        patch_one i386-windows   build32.sh mnc detour32-mnc.bin \
+            "$MNC_CLEAN_I386"   "$MNC_PATCHED_I386"
+        ;;
     rosetta)
         ARCHES="x86_64-windows i386-windows"
         patch_one x86_64-windows build.sh   rosetta detour2.bin \

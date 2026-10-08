@@ -49,7 +49,7 @@ struct CleanTests {
     }
 }
 
-// The regression: verifyPatchInputs read lib/wine/<arch>/ntdll.dll directly, which holds the
+// The regression: verifyPatchInputs read <arch>/ntdll.dll directly, which holds the
 // patched file on any launched clone, so it reported a mismatch on a runner that was correct.
 @Suite("Patch input verification")
 struct PatchInputTests {
@@ -70,7 +70,7 @@ struct PatchInputTests {
 
     private func makeRoot(live: Data, backup: Data?) throws -> URL {
         let root = try scratchDirectory("setup")
-        let dir = root.appending(path: "lib/wine/x86_64-windows")
+        let dir = root.appending(path: "dlls/ntdll/x86_64-windows")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try live.write(to: dir.appending(path: "ntdll.dll"))
         if let backup {
@@ -84,7 +84,7 @@ struct PatchInputTests {
         let root = try makeRoot(live: Self.cleanBytes, backup: nil)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try CrossOverSource.verifyPatchInputs(root: root, build: Self.build)
+        try MncWineSource.verifyPatchInputs(root: root, build: Self.build)
     }
 
     @Test("A runner that has been launched verifies through the backup")
@@ -92,7 +92,7 @@ struct PatchInputTests {
         let root = try makeRoot(live: Self.patchedBytes, backup: Self.cleanBytes)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try CrossOverSource.verifyPatchInputs(root: root, build: Self.build)
+        try MncWineSource.verifyPatchInputs(root: root, build: Self.build)
     }
 
     @Test("A patched file with no backup beside it is refused")
@@ -101,7 +101,7 @@ struct PatchInputTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         #expect(throws: StepFailure.self) {
-            try CrossOverSource.verifyPatchInputs(root: root, build: Self.build)
+            try MncWineSource.verifyPatchInputs(root: root, build: Self.build)
         }
     }
 
@@ -111,7 +111,7 @@ struct PatchInputTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         #expect(throws: StepFailure.self) {
-            try CrossOverSource.verifyPatchInputs(root: root, build: Self.build)
+            try MncWineSource.verifyPatchInputs(root: root, build: Self.build)
         }
     }
 }
@@ -124,24 +124,18 @@ struct ClonedPayloadTests {
         let runners = try scratchDirectory("setup")
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let payload = SupportPaths.clonedRoot(forBuild: "1.2.3.4", runners: runners)
-        try FileManager.default.createDirectory(
-            at: payload.appending(path: "lib/wine"), withIntermediateDirectories: true
-        )
+        try markClone(SupportPaths.clonedRoot(forBuild: "1.2.3.4", runners: runners))
 
         #expect(RunnerInstaller.hasClone(forBuild: "1.2.3.4", runners: runners))
     }
 
-    @Test("A clone still shaped as an .app does not count as cloned")
-    func refusesBundleShapedClone() throws {
+    @Test("A tree unpacked one level too deep does not count as installed")
+    func refusesNestedTree() throws {
         let runners = try scratchDirectory("setup")
         defer { try? FileManager.default.removeItem(at: runners) }
 
         let clone = SupportPaths.runnerRoot(forBuild: "1.2.3.4", runners: runners)
-        try FileManager.default.createDirectory(
-            at: clone.appending(path: "CrossOver Preview.app/Contents/SharedSupport/CrossOver/lib/wine"),
-            withIntermediateDirectories: true
-        )
+        try markClone(clone.appending(path: "wine/wine-unified"))
 
         #expect(!RunnerInstaller.hasClone(forBuild: "1.2.3.4", runners: runners))
     }

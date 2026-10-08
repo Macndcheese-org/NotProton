@@ -16,7 +16,7 @@ final class PrefixesModel {
 
     private(set) var stale: Set<String> = []
 
-    // True when no installed compatibility tool matches the version of CrossOver that last
+    // True when no installed compatibility tool matches the version of MnC Wine that last
     // booted the prefix.
     func isStale(_ prefix: WinePrefix) -> Bool {
         stale.contains(prefix.id)

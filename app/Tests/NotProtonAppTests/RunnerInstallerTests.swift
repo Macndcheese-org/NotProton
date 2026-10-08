@@ -3,7 +3,7 @@ import Testing
 
 @testable import NotProtonApp
 
-@Suite("Cloning a runner")
+@Suite("Installing a runner from a release tarball")
 struct RunnerInstallerTests {
 
     private func makeRunners() throws -> URL {
@@ -13,87 +13,79 @@ struct RunnerInstallerTests {
         return runners
     }
 
-    // The clone is found afterwards at a fixed name inside the build directory, so the copy has
-    // to land as a child. cp keys that off the destination existing, and first time it does not.
-    @Test("The copy lands as a payload directory inside the build directory")
-    func copyLandsAsChildOfBuildDirectory() throws {
-        let runners = try makeRunners()
-        defer { try? FileManager.default.removeItem(at: runners) }
-
-        let source = runners.appending(path: "source/CrossOver Preview.app/Contents/SharedSupport/CrossOver")
-        try FileManager.default.createDirectory(
-            at: source.appending(path: "lib/wine"), withIntermediateDirectories: true
-        )
-
-        let version = "27.0.0.40921"
-        let target = SupportPaths.runnerRoot(forBuild: version, runners: runners)
-        try RunnerInstaller.copyPayload(from: source, to: target)
-
-        #expect(FileManager.default.fileExists(
-            atPath: target.appending(path: "CrossOver/lib/wine").path(percentEncoded: false)
-        ))
-
-        // The check the setup path runs next has to agree, because that is where a wrongly
-        // shaped copy was being reported.
-        #expect(RunnerInstaller.hasClone(forBuild: version, runners: runners))
-    }
-
-    // A CrossOver bundle holding only the files the clone path hashes, with the build describing
-    // those exact bytes, so verification passes without a real 1.2G install to copy.
-    private func makeSupportedInstall(
-        in directory: URL, version: String = "27.0.0.40921"
-    ) throws -> (CrossOverInstall, RunnerBuild) {
-        let bundle = directory.appending(path: "source/CrossOver Preview.app")
-        let wine = bundle.appending(path: "Contents/SharedSupport/CrossOver/lib/wine")
-
-        for arch in WineArch.allCases {
-            try FileManager.default.createDirectory(
-                at: wine.appending(path: arch.rawValue), withIntermediateDirectories: true
-            )
-            try Data("ntdll for \(arch.rawValue)".utf8)
-                .write(to: wine.appending(path: "\(arch.rawValue)/ntdll.dll"))
+    // A release holding only the files the install path checks and hashes, with the build
+    // describing those exact bytes, so verification passes without a real 2G tree.
+    private func makeSupportedArchive(
+        in directory: URL, version: String = "11.18-aaaaaaaa", complete: Bool = true
+    ) throws -> (WineArchive, RunnerBuild) {
+        let fm = FileManager.default
+        let tree = directory.appending(path: "tree")
+        func write(_ path: String, _ text: String) throws {
+            let file = tree.appending(path: path)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: file)
         }
-        try FileManager.default.createDirectory(
-            at: wine.appending(path: "x86_64-unix"), withIntermediateDirectories: true
-        )
-        try Data("wine loader".utf8).write(to: wine.appending(path: "x86_64-unix/wine"))
-
-        func hash(_ url: URL) throws -> String {
-            try #require(Digest.sha256IfPresent(url))
+        try write("loader/wine", "wine loader \(version)")
+        try write("server/wineserver", "wineserver")
+        try write("loader/wine.inf", "inf")
+        try write("dlls/ntdll/ntdll.so", "ntdll.so")
+        if complete { try write("mnc-d3d/LAYOUT", "mnc-d3d pack layout: 2\n") }
+        for arch in [WineArch.x86_64Windows, .i386Windows] {
+            try write("dlls/ntdll/\(arch.rawValue)/ntdll.dll", "ntdll for \(arch.rawValue)")
         }
 
-        var clean: [WineArch: String] = [:]
-        for arch in WineArch.allCases {
-            clean[arch] = try hash(wine.appending(path: "\(arch.rawValue)/ntdll.dll"))
+        func hash(_ path: String) throws -> String {
+            try #require(Digest.sha256IfPresent(tree.appending(path: path)))
         }
 
         let build = RunnerBuild(
             bundleVersion: version,
-            releaseVersion: "20260821",
+            releaseVersion: "11.18",
             flavor: nil,
-            loaderSHA256: try hash(wine.appending(path: "x86_64-unix/wine")),
-            cleanNtdll: clean,
+            loaderSHA256: try hash("loader/wine"),
+            cleanNtdll: [
+                .x86_64Windows: try hash("dlls/ntdll/x86_64-windows/ntdll.dll"),
+                .i386Windows: try hash("dlls/ntdll/i386-windows/ntdll.dll"),
+            ],
             patchedNtdll: [:]
         )
-        let install = CrossOverInstall(
-            bundle: bundle, releaseVersion: build.releaseVersion, support: .supported(build)
-        )
-        return (install, build)
+
+        let tarball = directory.appending(path: "source/wine-unified-osx64.tar.xz")
+        try fm.createDirectory(at: tarball.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let packed = try Shell.run("/usr/bin/tar", [
+            "-cJf", tarball.path(percentEncoded: false), "-C", tree.path(percentEncoded: false), ".",
+        ])
+        #expect(packed.status == 0)
+        return (WineArchive(file: tarball, support: .supported(build)), build)
     }
 
-    @Test("A payload that never finished copying is replaced rather than kept")
+    @Test("The tree lands inside the build directory where the run script looks for it")
+    func treeLandsInsideBuildDirectory() throws {
+        let runners = try makeRunners()
+        defer { try? FileManager.default.removeItem(at: runners) }
+
+        let (archive, build) = try makeSupportedArchive(in: runners.appending(path: "src"))
+        _ = try RunnerInstaller.clone(from: archive, runners: runners)
+
+        let root = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
+        #expect(root.path(percentEncoded: false).hasSuffix("/mnc-\(build.id)/wine"))
+        #expect(FileManager.default.fileExists(atPath: RunnerLayout.loader(in: root).path(percentEncoded: false)))
+        #expect(RunnerInstaller.hasClone(forBuild: build.id, runners: runners))
+    }
+
+    @Test("A tree that never finished unpacking is replaced rather than kept")
     func partialCloneIsReplaced() throws {
         let runners = try makeRunners()
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let (install, build) = try makeSupportedInstall(in: runners.appending(path: "src"))
+        let (archive, build) = try makeSupportedArchive(in: runners.appending(path: "src"))
 
         let stale = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
         try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
         try Data("junk".utf8).write(to: stale.appending(path: "leftover"))
         #expect(!RunnerInstaller.hasClone(forBuild: build.id, runners: runners))
 
-        _ = try RunnerInstaller.clone(from: install, runners: runners)
+        _ = try RunnerInstaller.clone(from: archive, runners: runners)
 
         #expect(RunnerInstaller.hasClone(forBuild: build.id, runners: runners))
         #expect(!FileManager.default.fileExists(
@@ -101,105 +93,95 @@ struct RunnerInstallerTests {
         ))
     }
 
-    @Test("Cloning another build leaves the first clone in place")
+    @Test("Installing another build leaves the first one in place")
     func cloneKeepsOtherBuilds() throws {
         let runners = try makeRunners()
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let (first, firstBuild) = try makeSupportedInstall(
-            in: runners.appending(path: "first"), version: "1.0.0.1"
+        let (first, firstBuild) = try makeSupportedArchive(
+            in: runners.appending(path: "first"), version: "11.18-aaaaaaaa"
         )
-        let (second, _) = try makeSupportedInstall(
-            in: runners.appending(path: "second"), version: "2.0.0.2"
+        let (second, secondBuild) = try makeSupportedArchive(
+            in: runners.appending(path: "second"), version: "11.19-bbbbbbbb"
         )
 
         _ = try RunnerInstaller.clone(from: first, runners: runners)
         _ = try RunnerInstaller.clone(from: second, runners: runners)
-        #expect(RunnerInstaller.hasClone(forBuild: firstBuild.bundleVersion, runners: runners))
-        #expect(RunnerInstaller.hasClone(forBuild: "2.0.0.2", runners: runners))
+        #expect(RunnerInstaller.hasClone(forBuild: firstBuild.id, runners: runners))
+        #expect(RunnerInstaller.hasClone(forBuild: secondBuild.id, runners: runners))
     }
 
-    // The first attempt left the build directory holding the payload's contents, not the payload.
-    // Setup read that as a finished clone, skipped the copy, then failed the lookup itself.
-    @Test("A build directory with no payload in it is cloned again rather than trusted")
-    func replacesACloneThatHasNoPayloadInIt() throws {
+    @Test("A tarball that is not a build tree is refused and leaves nothing behind")
+    func incompleteTreeIsRefused() throws {
         let runners = try makeRunners()
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let (install, build) = try makeSupportedInstall(in: runners)
+        let (archive, build) = try makeSupportedArchive(in: runners.appending(path: "src"), complete: false)
 
-        let target = SupportPaths.runnerRoot(forBuild: build.bundleVersion, runners: runners)
-        try FileManager.default.createDirectory(
-            at: target.appending(path: "Contents/SharedSupport/CrossOver"),
-            withIntermediateDirectories: true
-        )
-
-        _ = try RunnerInstaller.clone(from: install, runners: runners)
-
-        #expect(RunnerInstaller.hasClone(forBuild: build.bundleVersion, runners: runners))
-
-        // The leftover contents must be gone, not left beside the payload.
-        #expect(!FileManager.default.fileExists(
-            atPath: target.appending(path: "Contents").path(percentEncoded: false)
-        ))
+        let failure = try #require(throws: StepFailure.self) {
+            try RunnerInstaller.clone(from: archive, runners: runners)
+        }
+        #expect(failure.detail.contains("mnc-d3d/LAYOUT"))
+        let target = SupportPaths.runnerRoot(forBuild: build.id, runners: runners)
+        let staging = target.deletingLastPathComponent().appending(path: ".\(target.lastPathComponent).new")
+        #expect(!FileManager.default.fileExists(atPath: target.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: staging.path(percentEncoded: false)))
     }
 
-    // Keeping lib/wine is not the same as keeping the loader inside it, and the loader is what
-    // a game needs. Setup skips the copy for such a clone, so nothing else catches the loss.
-    @Test("A clone that kept its payload directory but lost its loader is refused")
+    // Setup skips unpacking for a tree that is already there, so nothing else catches a loader
+    // that went missing.
+    @Test("A tree that lost its loader is refused")
     func refusesCloneThatLostItsLoader() throws {
         let runners = try makeRunners()
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let (install, build) = try makeSupportedInstall(in: runners)
-        _ = try RunnerInstaller.clone(from: install, runners: runners)
+        let (archive, build) = try makeSupportedArchive(in: runners.appending(path: "src"))
+        _ = try RunnerInstaller.clone(from: archive, runners: runners)
 
-        let root = SupportPaths.clonedRoot(forBuild: build.bundleVersion, runners: runners)
-        try FileManager.default.removeItem(at: CrossOverSource.unixLoader(inRoot: root))
-
-        // Still counts as cloned, so the copy is skipped and the loader check is reached.
-        #expect(RunnerInstaller.hasClone(forBuild: build.bundleVersion, runners: runners))
+        let root = SupportPaths.clonedRoot(forBuild: build.id, runners: runners)
+        try Data("swapped".utf8).write(to: MncWineSource.unixLoader(inRoot: root))
 
         let failure = try #require(throws: StepFailure.self) {
-            try RunnerInstaller.clone(from: install, runners: runners)
+            try RunnerInstaller.clone(from: archive, runners: runners)
         }
-        #expect(
-            failure.detail.contains("no Wine loader"),
-            "a clone with no loader in it was reported as something else"
-        )
+        #expect(failure.detail.contains("does not match build"))
     }
 
-    // Replacing an intact clone used to remove it before the copy, so a failed copy took a
-    // working 1.2G tree with it, with nothing in the UI.
-    @Test("A failed recopy leaves the working clone intact")
+    // Replacing an intact tree used to remove it first, so a failed unpack took a working
+    // runner with it.
+    @Test("A failed reinstall leaves the working tree intact")
     func keepsWorkingCloneWhenRecopyFails() throws {
         let runners = try makeRunners()
         defer { try? FileManager.default.removeItem(at: runners) }
 
-        let (install, build) = try makeSupportedInstall(in: runners)
-        _ = try RunnerInstaller.clone(from: install, runners: runners)
+        let (archive, build) = try makeSupportedArchive(in: runners.appending(path: "src"))
+        _ = try RunnerInstaller.clone(from: archive, runners: runners)
 
-        let payload = SupportPaths
-            .clonedRoot(forBuild: build.bundleVersion, runners: runners)
-            .appending(path: "lib/wine")
+        let loader = RunnerLayout.loader(in: SupportPaths.clonedRoot(forBuild: build.id, runners: runners))
         let files = FileManager.default
+        #expect(files.fileExists(atPath: loader.path(percentEncoded: false)))
 
-        // Asserted before the failure, or the checks afterwards pass on a clone that was
-        // never there to begin with.
-        #expect(files.fileExists(atPath: payload.path(percentEncoded: false)))
-
-        // Removing the source fails the copy the same way running out of room part way
-        // through does, which is the case that costs the user a working runner.
-        try files.removeItem(at: runners.appending(path: "source"))
+        try files.removeItem(at: archive.file)
 
         #expect(throws: StepFailure.self) {
-            try RunnerInstaller.clone(from: install, replacingExisting: true, runners: runners)
+            try RunnerInstaller.clone(from: archive, replacingExisting: true, runners: runners)
         }
 
         #expect(
-            files.fileExists(atPath: payload.path(percentEncoded: false)),
-            "a recopy that failed destroyed the working clone"
+            files.fileExists(atPath: loader.path(percentEncoded: false)),
+            "a reinstall that failed destroyed the working tree"
         )
+    }
+
+    @Test("A tarball NotProton does not know is refused before anything is unpacked")
+    func unsupportedArchiveIsRefused() throws {
+        let runners = try makeRunners()
+        defer { try? FileManager.default.removeItem(at: runners) }
+        let archive = WineArchive(
+            file: runners.appending(path: "wine-unified-osx64.tar.xz"), support: .unsupportedBuild("0123")
+        )
+        #expect(throws: StepFailure.self) { try RunnerInstaller.clone(from: archive, runners: runners) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: runners.path(percentEncoded: false)).isEmpty)
     }
 
     @Test("The state reader agrees with what was just written")
@@ -208,10 +190,7 @@ struct RunnerInstallerTests {
         defer { try? FileManager.default.removeItem(at: runners) }
 
         let version = SupportedRunners.all[0].bundleVersion
-        try FileManager.default.createDirectory(
-            at: runners.appending(path: "crossover-\(version)/CrossOver/lib/wine"),
-            withIntermediateDirectories: true
-        )
+        try markClone(SupportPaths.clonedRoot(forBuild: version, runners: runners))
 
         #expect(RunnerStore.state(runners: runners, verify: { _, _ in [] })
             == .ready(builds: [version]))

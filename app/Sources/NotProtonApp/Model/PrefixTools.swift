@@ -48,14 +48,14 @@ enum PrefixTools {
         else { return nil }
         for build in RunnerStore.clonedBuilds(in: runners) {
             let inf = SupportPaths.clonedRoot(forBuild: build, runners: runners)
-                .appending(path: "share/wine/wine.inf")
+                .appending(path: "loader/wine.inf")
             let modified = (try? FileManager.default.attributesOfItem(
                 atPath: inf.path(percentEncoded: false))[.modificationDate]) as? Date
             if let modified, Int(modified.timeIntervalSince1970) == updated {
                 return PrefixBuildRecord(build: build, display: nil)
             }
         }
-        return PrefixBuildRecord(build: "", display: "another version of CrossOver")
+        return PrefixBuildRecord(build: "", display: "another version of MnC Wine")
     }
 
     static func writeBuildRecord(_ tool: InstalledTool, for prefix: WinePrefix) throws {
@@ -102,25 +102,25 @@ enum PrefixTools {
     }
 
     static func environment(
-        prefix: WinePrefix, runner: URL, flavor: CompatTool.Flavor = .fex
+        prefix: WinePrefix, runner: URL, flavor: CompatTool.Flavor = .rosetta
     ) -> [String: String] {
-        let root = runner.path(percentEncoded: false)
         var environment = ProcessInfo.processInfo.environment
-        environment["CX_ROOT"] = root
-        environment["CX_HOME"] = SupportPaths.applicationSupport
-            .appending(path: "CrossOver").path(percentEncoded: false)
         let wine = layout(runner: runner, flavor: flavor)
         environment["WINELOADER"] = wine.loader.path(percentEncoded: false)
         environment["WINESERVER"] = wine.server.path(percentEncoded: false)
-        environment["WINEDLLPATH"] = "\(root)/lib/wine/x86_64-windows:"
-            + wine.unixDir.path(percentEncoded: false)
+        // A build tree finds its own builtins, so nothing goes on WINEDLLPATH.
+        environment.removeValue(forKey: "WINEDLLPATH")
         environment["WINEPREFIX"] = prefix.pfx.path(percentEncoded: false)
         environment["WINEMSYNC"] = syncBackend(prefix: prefix)
-        environment["PATH"] = "\(root)/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+        environment["DYLD_FALLBACK_LIBRARY_PATH"] = (RuntimeLibraries.searchDirs.map {
+            $0.path(percentEncoded: false)
+        } + ["/usr/lib"]).joined(separator: ":")
+        let fonts = "/usr/local/opt/fontconfig/etc/fonts"
+        if FileManager.default.fileExists(atPath: fonts) { environment["FONTCONFIG_PATH"] = fonts }
         return environment
     }
 
-    static func loader(runner: URL, flavor: CompatTool.Flavor = .fex) -> URL {
+    static func loader(runner: URL, flavor: CompatTool.Flavor = .rosetta) -> URL {
         layout(runner: runner, flavor: flavor).loader
     }
 
@@ -130,26 +130,12 @@ enum PrefixTools {
         let unixDir: URL
     }
 
-    static func layout(runner: URL, flavor: CompatTool.Flavor = .fex) -> WineLayout {
-        let fm = FileManager.default
-        let bin = runner.appending(path: "bin")
-        func executable(_ url: URL) -> Bool {
-            fm.isExecutableFile(atPath: url.path(percentEncoded: false))
-        }
-
-        let arm = runner.appending(path: "lib/wine/aarch64-unix")
-        let armLoader = arm.appending(path: "wine.app/Contents/MacOS/wine")
-        let armServer = bin.appending(path: "wineserver-arm64")
-        if flavor == .fex, executable(armLoader), executable(armServer) {
-            return WineLayout(loader: armLoader, server: armServer, unixDir: arm)
-        }
-
-        let unix = runner.appending(path: "lib/wine/x86_64-unix")
-        let server = bin.appending(path: "wineserver")
-        return WineLayout(
-            loader: unix.appending(path: "wine"),
-            server: executable(server) ? server : bin.appending(path: "wineserver-x86"),
-            unixDir: unix
+    // MnC Wine is one x86_64 build tree, so every flavor resolves to the same pair.
+    static func layout(runner: URL, flavor: CompatTool.Flavor = .rosetta) -> WineLayout {
+        WineLayout(
+            loader: RunnerLayout.loader(in: runner),
+            server: RunnerLayout.wineserver(in: runner),
+            unixDir: runner.appending(path: "dlls/ntdll")
         )
     }
 

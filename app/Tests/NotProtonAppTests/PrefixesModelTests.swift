@@ -133,11 +133,14 @@ struct PrefixesModelTests {
         let (dir, library) = try makeLibrary(appIDs: ["1574480", "253750"])
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let build = try #require(SupportedRunners.all.first { $0.tools.count == 2 })
-        let tools = build.tools.map { InstalledTool(tool: $0, build: build.id) }
+        let build = SupportedRunners.all[0]
+        let tools = [
+            InstalledTool(tool: CompatTool(name: "notproton-arm", flavor: .fex, display: "MnC Wine 11.18 ARM64"),
+                          build: build.id),
+        ] + build.tools.map { InstalledTool(tool: $0, build: build.id) }
         let named = [
-            ("1574480", "CrossOver Preview - ARM64 Build (FEX)", UInt16(0xAA64)),
-            ("253750", "CrossOver Preview - ARM64 Build (Rosetta)", UInt16(0x8664)),
+            ("1574480", "MnC Wine 11.18 (old ARM64 name)", UInt16(0xAA64)),
+            ("253750", "MnC Wine 11.18 (old name)", UInt16(0x8664)),
         ]
         for (appID, old, machine) in named {
             let root = library.compatdata.appending(path: appID)
@@ -156,8 +159,8 @@ struct PrefixesModelTests {
         func shown(_ appID: String) throws -> String? {
             model.lastTool(try #require(model.prefixes.first { $0.appID == appID }))
         }
-        #expect(try shown("1574480") == "CrossOver 2026 08 21-ARM64 - FEX")
-        #expect(try shown("253750") == "CrossOver 2026 08 21-ARM64 - Rosetta")
+        #expect(try shown("1574480") == "MnC Wine 11.18 ARM64")
+        #expect(try shown("253750") == "MnC Wine 11.18")
     }
 
     @Test("A load lists the prefixes and measures each one")

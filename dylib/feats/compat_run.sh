@@ -18,45 +18,55 @@ case "$verb" in
 esac
 
 np_support="$HOME/Library/Application Support/notproton"
-# cxcompatdb resolves its database through CX_HOME and logs an error for
-# every module loaded without it :(
-export CX_HOME="$HOME/Library/Application Support/CrossOver"
-np_flavor=""
 np_build=""
 CDPATH=''
 np_tool_dir=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || np_tool_dir=""
-if [ -n "$np_tool_dir" ] && [ -r "$np_tool_dir/flavor" ]; then
-  read -r np_flavor < "$np_tool_dir/flavor" || np_flavor=""
-fi
 if [ -n "$np_tool_dir" ] && [ -r "$np_tool_dir/build" ]; then
   read -r np_build < "$np_tool_dir/build" || np_build=""
 fi
 case "$np_build" in *[!A-Za-z0-9.-]*) np_build="" ;; esac
 np_display=$(sed -n 's/.*"display_name"[[:space:]]*"\(.*\)".*/\1/p' \
   "$np_tool_dir/compatibilitytool.vdf" 2>/dev/null | head -1) || np_display=""
-[ -n "$np_display" ] || np_display="CrossOver build ${np_build:-unknown}"
-CX_ROOT="$np_support/runners/crossover-$np_build/CrossOver"
-export CX_ROOT
+[ -n "$np_display" ] || np_display="MnC Wine build ${np_build:-unknown}"
+# MnC Wine ships its build directory rather than an installed tree, so the loader,
+# the server and every builtin live where the build left them.
+MNC_ROOT="$np_support/runners/mnc-$np_build/wine"
 
-wine_unix="$CX_ROOT/lib/wine/aarch64-unix"
-WINELOADER="$wine_unix/wine.app/Contents/MacOS/wine"
-WINESERVER="$CX_ROOT/bin/wineserver-arm64"
-if [ "$np_flavor" = rosetta ] || [ ! -x "$WINELOADER" ] || [ ! -x "$WINESERVER" ]; then
-  wine_unix="$CX_ROOT/lib/wine/x86_64-unix"
-  WINELOADER="$wine_unix/wine"
-  WINESERVER="$CX_ROOT/bin/wineserver"
-  [ -x "$WINESERVER" ] || WINESERVER="$CX_ROOT/bin/wineserver-x86"
-fi
+# MnC Wine is one x86_64 build that runs under Rosetta. ntdll.so lives in its module
+# folder, and the bridge keeps its unix side under the x86_64-unix name.
+wine_unix="$MNC_ROOT/dlls/ntdll"
+wine_unix_arch=x86_64-unix
+WINELOADER="$MNC_ROOT/loader/wine"
+WINESERVER="$MNC_ROOT/server/wineserver"
 export WINELOADER WINESERVER
+
+# Wine names the Windows profile after USER. Steam maps cloud saves into
+# drive_c/users/steamuser, as it does for Proton.
+export USER=steamuser LOGNAME=steamuser
 
 # Keeps Wine from inheriting the prefix and template locks (fd 8 and 9).
 without_lock_fds() {
   "$@" 8>&- 9>&-
 }
 
-# If two WINEDLLPATH directories have the same DLL, Wine uses the one listed first.
-export WINEDLLPATH="$CX_ROOT/lib/wine/x86_64-windows:$wine_unix${WINEDLLPATH:+:$WINEDLLPATH}"
-export PATH="$CX_ROOT/bin:$PATH"
+# A build tree finds its own builtins. WINEDLLPATH only carries what is put on it below,
+# and if two of its directories have the same DLL, Wine uses the one listed first.
+export WINEDLLPATH="${WINEDLLPATH:-}"
+
+# MnC Wine loads FreeType, fontconfig and GnuTLS at runtime, and needs x86_64 copies.
+# Intel Homebrew has them under /usr/local, and MacNdCheese keeps its own closure in deps.
+mnc_deps="$HOME/Library/Application Support/MacNCheese/deps"
+mnc_dyld=""
+for dir in /usr/local/opt/freetype/lib /usr/local/opt/fontconfig/lib \
+  /usr/local/opt/gnutls/lib /usr/local/opt/sdl2/lib /usr/local/opt/glib/lib \
+  /usr/local/opt/gettext/lib /usr/local/opt/gstreamer/lib /usr/local/lib \
+  "$mnc_deps/mnc-fonts" "$mnc_deps/mnc-tls" "$mnc_deps/mnc-vulkan" "$mnc_deps/mnc-sdl"; do
+  [ -d "$dir" ] && mnc_dyld="${mnc_dyld:+$mnc_dyld:}$dir"
+done
+mnc_dyld="${mnc_dyld:+$mnc_dyld:}/usr/lib"
+export DYLD_FALLBACK_LIBRARY_PATH="$mnc_dyld"
+[ ! -d /usr/local/opt/fontconfig/etc/fonts ] \
+  || export FONTCONFIG_PATH=/usr/local/opt/fontconfig/etc/fonts
 
 if [ -n "$STEAM_COMPAT_DATA_PATH" ]; then
   log="$STEAM_COMPAT_DATA_PATH/notproton-run.log"
@@ -124,8 +134,8 @@ prefix_machine() {
 
 tool_name() {
   case "$1" in
-    aa64) printf 'the FEX build of CrossOver' ;;
-    8664) printf 'the Rosetta build of CrossOver' ;;
+    aa64) printf 'an ARM64 Wine build' ;;
+    8664) printf 'MnC Wine' ;;
     *) printf 'an older 32-bit setup' ;;
   esac
 }
@@ -145,10 +155,7 @@ alert_safe() {
 }
 
 refuse_foreign_prefix() {
-  case "${wine_unix##*/}" in
-    aarch64-unix) want=aa64 ;;
-    *) want=8664 ;;
-  esac
+  want=8664
   have=$(prefix_machine) || return 0
   [ "$have" = "$want" ] && return 0
   echo "=== prefix ntdll is $have and this compatibility tool wants $want, rebuild the prefix in NotProton ===" >> "$log" 2>&1 || true
@@ -163,17 +170,17 @@ last_wine_build() {
   # Wine ends the line with CRLF.
   updated=${updated%"$(printf '\r')"}
   case "$updated" in '' | *[!0-9]*) return 0 ;; esac
-  [ "$updated" = "$(stat -f %m "$CX_ROOT/share/wine/wine.inf" 2>/dev/null)" ] && return 0
+  [ "$updated" = "$(stat -f %m "$MNC_ROOT/loader/wine.inf" 2>/dev/null)" ] && return 0
   had_build=other
-  had_display="another version of CrossOver"
-  for inf in "$np_support"/runners/crossover-*/CrossOver/share/wine/wine.inf; do
+  had_display="another Wine build"
+  for inf in "$np_support"/runners/mnc-*/wine/loader/wine.inf; do
     [ "$(stat -f %m "$inf" 2>/dev/null)" = "$updated" ] || continue
     if [ "$had_build" != other ]; then
       had_build=other
-      had_display="another version of CrossOver"
+      had_display="another Wine build"
       break
     fi
-    had_build=${inf#"$np_support/runners/crossover-"}
+    had_build=${inf#"$np_support/runners/mnc-"}
     had_build=${had_build%%/*}
     had_display=$(awk -F '\t' -v b="$had_build" '$2 == b { print $4; exit }' \
       "$np_support/tools" 2>/dev/null) || had_display=""
@@ -194,7 +201,7 @@ refuse_other_build() {
   fi
   if [ -n "$had_build" ] && [ "$had_build" != "$np_build" ]; then
     echo "=== prefix was last run by build $had_build and this compatibility tool runs $np_build, rebuild the prefix in NotProton ===" >> "$log" 2>&1 || true
-    had_display=$(alert_safe "${had_display:-CrossOver build $had_build}")
+    had_display=$(alert_safe "${had_display:-MnC Wine build $had_build}")
     show_alert "This game needs its prefix rebuilt" "This game's prefix was last run by $had_display, and this compatibility tool runs $(alert_safe "$np_display"). Rebuild the prefix in NotProton to run it here, or pick $had_display again in the game's Compatibility settings. You will not lose game saves by rebuilding the prefix."
     exit 1
   fi
@@ -400,7 +407,7 @@ write_owned_controllers() {
   return 1
 }
 
-# Proton hides the controllers that Steam Input handles from the Wine process. CrossOver
+# Proton hides the controllers that Steam Input handles from the Wine process. Wine
 # still reads a few directly (DualSense, DualShock 4, Switch 1 Pro Controller and Joy-Cons),
 # so Hidraw=0 hides those too. The Switch controllers get Hidraw=0 even when Steam Input
 # is off, to avoid silently breaking controller support in most games.
@@ -486,18 +493,163 @@ import_prefix_settings() {
     || echo "=== prefix settings import exited status=$import_status ===" >> "$log" 2>&1 || true
 }
 
+# MnC Wine routes d3d per process. Its loader rewrites d3d11/dxgi/d3d10core/d3d12 loads
+# to flat-named copies in system32 (d3d11_dxmt.dll, d3d11_d3dm.dll...), picked by
+# MNC_GAME_BACKEND. The copies come out of the mnc-d3d pack shipped with the build.
+mnc_pack="$MNC_ROOT/mnc-d3d"
+
+apple_silicon() {
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]
+}
+
+# The Steam panel stores the choice in CX_GRAPHICS_BACKEND. An explicit MNC_GAME_BACKEND
+# in the launch options wins.
+pick_backend() {
+  case "$MNC_GAME_BACKEND" in
+    d3dmetal|dxmt|dxvk|vr|opengl) printf '%s' "$MNC_GAME_BACKEND"; return 0 ;;
+  esac
+  case "$CX_GRAPHICS_BACKEND" in
+    dxmt) printf dxmt ;;
+    opengl|wined3d) printf opengl ;;
+    dxvk) if [ -d "$mnc_pack/dxvk" ]; then printf dxvk; else printf d3dmetal; fi ;;
+    *) printf d3dmetal ;;
+  esac
+}
+
+# GPTK 4.0b2 is built against the macOS 26.4 SDK, so older systems stay on GPTK 3.0.
+pick_d3dm() {
+  version=$(sw_vers -productVersion 2>/dev/null) || version=0
+  major=${version%%.*}
+  minor=${version#"$major"}
+  minor=${minor#.}
+  minor=${minor%%.*}
+  case "$major" in ''|*[!0-9]*) major=0 ;; esac
+  case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
+  if [ -f "$mnc_pack/d3dm-gptk4/d3d11.dll" ] \
+    && { [ "$major" -gt 26 ] || { [ "$major" -eq 26 ] && [ "$minor" -ge 4 ]; }; }; then
+    printf d3dm-gptk4
+  else
+    printf d3dm
+  fi
+}
+
+# Resolves a flat system32 name to its file in the pack. A backend-suffixed name only ever
+# comes from its own backend folder. The canonical d3d11, d3d12 and dxgi are the GPTK stubs
+# and come from the selected d3dm folder, and the rest of the canonical set from base/.
+pack_file() {
+  flat=$1
+  suffixed=1
+  case "$flat" in
+    d3d9_dxmt.dll) sub=dxmt; name=d3d9.dll ;;
+    d3d9_dxmt32.dll) sub=dxmt; name=d3d9-32.dll ;;
+    wineopenxr.dll) sub=openxr; name=wineopenxr.dll ;;
+    *_d3dm.dll|*_dxmt.dll|*_dxvk.dll|*_opengl.dll|*_openxr.dll)
+      stem=${flat%.dll}
+      sub=${stem##*_}
+      name=${stem%_*}.dll
+      ;;
+    d3d11.dll|d3d12.dll|dxgi.dll) sub=d3dm; name=$flat; suffixed=0 ;;
+    *) sub=base; name=$flat; suffixed=0 ;;
+  esac
+  [ "$sub" != d3dm ] || sub=$mnc_d3dm
+  if [ -f "$mnc_pack/$sub/$name" ]; then
+    printf '%s' "$mnc_pack/$sub/$name"
+  elif [ "$suffixed" = 0 ] && [ -f "$mnc_pack/base/$name" ]; then
+    printf '%s' "$mnc_pack/base/$name"
+  else
+    return 1
+  fi
+}
+
+# Successive DXMT builds can land on the same size, so size alone would pin a prefix to
+# whatever it was first staged with. cp -p carries the pack's mtime along to compare.
+pack_copy_current() {
+  [ -f "$2" ] || return 1
+  [ "$(stat -f %z "$1")" = "$(stat -f %z "$2")" ] || return 1
+  drift=$(( $(stat -f %m "$1") - $(stat -f %m "$2") ))
+  [ "$drift" -le 2 ] && [ "$drift" -ge -2 ]
+}
+
+place_pack_file() {
+  pack_copy_current "$1" "$2" && return 0
+  rm -f "$2.np-new"
+  { cp -c -p "$1" "$2.np-new" 2>/dev/null || cp -p "$1" "$2.np-new"; } \
+    && mv -f "$2.np-new" "$2" && staged_count=$((staged_count + 1))
+}
+
+mnc_d3d_dlls="d3d11.dll dxgi.dll d3d10core.dll d3d10.dll d3d10_1.dll d3d12.dll d3d12core.dll
+winemetal.dll d3d11_dxmt.dll dxgi_dxmt.dll d3d10core_dxmt.dll d3d11_d3dm.dll dxgi_d3dm.dll
+d3d10core_d3dm.dll d3d10_d3dm.dll d3d12_d3dm.dll d3d11_dxvk.dll d3d10core_dxvk.dll dxgi_dxvk.dll
+d3d11_openxr.dll d3d10core_openxr.dll dxgi_openxr.dll wineopenxr.dll d3d11_opengl.dll
+dxgi_opengl.dll d3d10core_opengl.dll wined3d_opengl.dll"
+
+stage_mnc_d3d() {
+  sys32="$WINEPREFIX/drive_c/windows/system32"
+  wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  [ -d "$sys32" ] || return 0
+  staged_count=0
+  for flat in $mnc_d3d_dlls; do
+    src=$(pack_file "$flat") || continue
+    place_pack_file "$src" "$sys32/$flat" \
+      || echo "=== could not stage $flat ===" >> "$log" 2>&1 || true
+  done
+  # DXMT's d3d9 ships unmarked and only loads through d3d9=n, so it goes in on an Apple GPU
+  # alone, where wined3d is not the better path.
+  d3d9_native=0
+  if apple_silicon; then
+    d3d9_native=1
+    for pair in "d3d9_dxmt.dll:$sys32" "d3d9_dxmt32.dll:$wow64"; do
+      src=$(pack_file "${pair%%:*}") || { d3d9_native=0; continue; }
+      [ -d "${pair#*:}" ] || continue
+      place_pack_file "$src" "${pair#*:}/d3d9.dll" || d3d9_native=0
+    done
+  fi
+  # DLSS on D3DMetal goes through Apple's nvapi64 and nvngx-on-metalfx.
+  if [ "$mnc_backend" = d3dmetal ] && [ "$D3DM_ENABLE_METALFX" = 1 ]; then
+    for name in nvapi64.dll nvngx-on-metalfx.dll; do
+      [ ! -f "$mnc_pack/$mnc_d3dm/$name" ] \
+        || place_pack_file "$mnc_pack/$mnc_d3dm/$name" "$sys32/$name" || true
+    done
+  fi
+  echo "d3d: staged $staged_count file(s) from $mnc_pack ($mnc_d3dm), d3d9 native=$d3d9_native" \
+    >> "$log" 2>&1 || true
+}
+
+mnc_backend=$(pick_backend)
+mnc_d3dm=$(pick_d3dm)
+mnc_d3dm_external="$mnc_pack/$mnc_d3dm/external"
+export MNC_GAME_BACKEND="$mnc_backend"
+export CX_APPLEGPT_LIBD3DSHARED_PATH="$mnc_d3dm_external/libd3dshared.dylib"
+export CX_APPLEGPTK_LIBD3DSHARED_PATH="$CX_APPLEGPT_LIBD3DSHARED_PATH"
+# libd3dshared finds D3DMetal.framework beside itself.
+export DYLD_FALLBACK_LIBRARY_PATH="$mnc_d3dm_external:$DYLD_FALLBACK_LIBRARY_PATH"
+# Lets SDL3 and OpenGL 3.2 titles get a core context from the Mac driver.
+export WINE_MAC_GL_CONTEXT_CLAMP=1
+if apple_silicon && [ -x "$MNC_ROOT/mnc-rosetta/runtime_loader" ] \
+  && [ -f "$MNC_ROOT/mnc-rosetta/libRuntimeRosettax87" ]; then
+  # Wine itself decides per process whether to use it, for 32-bit x87 titles only.
+  export ROSETTA_X87_PATH="$MNC_ROOT/mnc-rosetta/runtime_loader"
+fi
+gst="/usr/local/opt/gstreamer/lib/gstreamer-1.0"
+if [ -d "$gst" ]; then
+  export GST_PLUGIN_SYSTEM_PATH_1_0="$gst" GST_PLUGIN_PATH="$gst"
+  # VideoToolbox decoding crashes under Rosetta.
+  export GST_PLUGIN_FEATURE_RANK="vtdec:NONE,vtdec_hw:NONE,avdec_h264:MAX,openh264dec:SECONDARY"
+fi
+echo "graphics: MNC_GAME_BACKEND=$mnc_backend (CX_GRAPHICS_BACKEND=${CX_GRAPHICS_BACKEND:-unset}) d3dm=$mnc_d3dm" \
+  >> "$log" 2>&1 || true
+
 stage_step="runner check"
-if [ -z "$np_build" ] || [ ! -d "$CX_ROOT/lib/wine" ]; then
+if [ -z "$np_build" ] || [ ! -x "$WINELOADER" ] || [ ! -x "$WINESERVER" ]; then
   echo "=== build ${np_build:-(none recorded)} behind this compatibility tool is not set up, set it up in NotProton ===" >> "$log" 2>&1 || true
-  show_alert "CrossOver is not set up" "The CrossOver build behind $(alert_safe "$np_display") is not set up. Set it up in NotProton, or pick another compatibility tool for this game."
+  show_alert "MnC Wine is not set up" "The MnC Wine build behind $(alert_safe "$np_display") is not set up. Set it up in NotProton, or pick another compatibility tool for this game."
   exit 1
 fi
-echo "runner: build $np_build ($np_display) at $CX_ROOT" >> "$log" 2>&1 || true
+echo "runner: build $np_build ($np_display) at $MNC_ROOT" >> "$log" 2>&1 || true
 
-# Each CrossOver build needs its own template.
-# FEX builds need two, one for FEX/arm64 Wine and one for Rosetta/AMD64 Wine
+# Each Wine build needs its own template.
 runner_id=""
-[ -z "$np_build" ] || runner_id="crossover-$np_build-${wine_unix##*/}"
+[ -z "$np_build" ] || runner_id="mnc-$np_build-$wine_unix_arch"
 
 in_template_env() {
   prefix="$1"
@@ -505,8 +657,8 @@ in_template_env() {
   without_lock_fds \
     env -i HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-}" TMPDIR="${TMPDIR:-/tmp}" \
     LANG="${LANG:-}" LC_ALL="${LC_ALL:-}" \
-    PATH="$CX_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin" CX_ROOT="$CX_ROOT" CX_HOME="$CX_HOME" \
-    WINEDLLPATH="$CX_ROOT/lib/wine/x86_64-windows:$wine_unix" \
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-}" FONTCONFIG_PATH="${FONTCONFIG_PATH:-}" \
     WINELOADER="$WINELOADER" WINESERVER="$WINESERVER" WINEPREFIX="$prefix" "$@"
 }
 
@@ -703,12 +855,12 @@ prefix_is_bare() (
 )
 
 template_identity() (
-  stat -f '%d:%i:%c' "$CX_ROOT" || return 1
+  stat -f '%d:%i:%c' "$MNC_ROOT" || return 1
   /usr/bin/shasum -a 256 < "$np_tool_dir/run" || return 1
-  cd "$CX_ROOT" || return 1
-  set -- "$WINELOADER" "$WINESERVER" share/wine/wine.inf
-  for file in lib/wine/*-windows/ntdll.dll lib/wine/*-windows/lsteamclient.dll \
-    lib/wine/*-unix/lsteamclient.so; do
+  cd "$MNC_ROOT" || return 1
+  set -- "$WINELOADER" "$WINESERVER" loader/wine.inf
+  for file in dlls/ntdll/*-windows/ntdll.dll dlls/lsteamclient/*-windows/lsteamclient.dll \
+    dlls/lsteamclient/lsteamclient.so; do
     [ ! -f "$file" ] || set -- "$@" "$file"
   done
   /usr/bin/shasum -a 256 "$@"
@@ -911,7 +1063,19 @@ if [ -n "$STEAM_COMPAT_DATA_PATH" ]; then
   # A prefix that Wine built just now only has dosdevices from this point on.
   stage_step="game drive"
   map_game_drive
+  stage_step="d3d staging"
+  stage_mnc_d3d
 fi
+
+# The engine's own defaults come first, so overrides from the launch options still win.
+mnc_overrides="winemenubuilder.exe=d;d3dcompiler_47=n,b;msvcp140_2,vcruntime140_1=n,b"
+if [ "$mnc_backend" = d3dmetal ] && [ "$D3DM_ENABLE_METALFX" = 1 ]; then
+  mnc_overrides="$mnc_overrides;nvapi64,nvngx-on-metalfx=n"
+else
+  mnc_overrides="$mnc_overrides;nvapi,nvapi64="
+fi
+[ "${d3d9_native:-0}" != 1 ] || mnc_overrides="$mnc_overrides;d3d9=n"
+export WINEDLLOVERRIDES="$mnc_overrides${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
 
 bridge_src="$np_support/bridge"
 prefix_steam="$WINEPREFIX/drive_c/Program Files (x86)/Steam"
@@ -920,9 +1084,9 @@ verify_runner() {
     echo "=== no patched ntdll for build $np_build in the bridge, set it up in NotProton ===" >> "$log" 2>&1 || true
     return
   fi
-  for arch in x86_64-windows i386-windows aarch64-windows; do
+  for arch in x86_64-windows i386-windows; do
     staged="$bridge_src/wine/$np_build/$arch/ntdll.dll"
-    live="$CX_ROOT/lib/wine/$arch/ntdll.dll"
+    live="$MNC_ROOT/dlls/ntdll/$arch/ntdll.dll"
     [ -f "$staged" ] || continue
     if [ ! -f "$live" ]; then
       echo "=== runner has no $arch ntdll, set up the runner in NotProton ===" >> "$log" 2>&1 || true
@@ -930,12 +1094,12 @@ verify_runner() {
       echo "=== runner $arch ntdll is not the patched copy, set up the runner in NotProton ===" >> "$log" 2>&1 || true
     fi
   done
-  for arch in i386-windows x86_64-windows "${wine_unix##*/}"; do
+  for arch in i386-windows x86_64-windows "$wine_unix_arch"; do
     case "$arch" in
-      *-unix) name="lsteamclient.so" ;;
-      *) name="lsteamclient.dll" ;;
+      *-unix) live="$MNC_ROOT/dlls/lsteamclient/lsteamclient.so"; name="lsteamclient.so" ;;
+      *) live="$MNC_ROOT/dlls/lsteamclient/$arch/lsteamclient.dll"; name="lsteamclient.dll" ;;
     esac
-    [ -f "$CX_ROOT/lib/wine/$arch/$name" ] && continue
+    [ -f "$live" ] && continue
     echo "=== runner is missing $arch/$name, set up the runner in NotProton ===" >> "$log" 2>&1 || true
   done
 }
@@ -1021,7 +1185,7 @@ if [ -d "$bridge_src" ] && [ -n "$WINEPREFIX" ]; then
   for f in $bridge_files; do
     src="$bridge_src/$f"
     if [ "$f" = lsteamclient.so ]; then
-      src="$bridge_src/${wine_unix##*/}/$f"
+      src="$bridge_src/$wine_unix_arch/$f"
     fi
     if ! cmp -s "$src" "$prefix_steam/$f"; then
       bridge_matches=0
@@ -1035,7 +1199,7 @@ if [ -d "$bridge_src" ] && [ -n "$WINEPREFIX" ]; then
     for f in $bridge_files; do
       rel="$f"
       if [ "$f" = lsteamclient.so ]; then
-        rel="${wine_unix##*/}/$f"
+        rel="$wine_unix_arch/$f"
       fi
       src="$bridge_src/$rel"
       if [ ! -f "$src" ]; then
@@ -1114,7 +1278,7 @@ if [ "$foreground" = 0 ]; then
   exit $status
 fi
 
-# Fixes CrossOver window focus issues
+# Fixes Wine window focus issues
 steam_root="$(dirname "$(dirname "$(dirname "$STEAM_COMPAT_DATA_PATH")")")"
 manifest="$steam_root/steamapps/appmanifest_$app_id.acf"
 client_root="$STEAM_COMPAT_CLIENT_INSTALL_PATH"
@@ -1257,16 +1421,10 @@ $icon_arg
 </plist>
 PLIST
 
-# Invokes macOS Game Mode
-for f in "$wine_unix"/*; do
-  [ -e "$f" ] || continue
-  base=${f##*/}
-  case "$base" in
-    wine|wine.app) continue ;;
-  esac
-  ln -sfn "$f" "$loader_macos/$base"
-done
-ln "$WINELOADER" "$loader_macos/wine" 2>/dev/null || cp "$WINELOADER" "$loader_macos/wine"
+# Invokes macOS Game Mode. Outside a loader/ folder the Wine loader opens ntdll.so from its
+# own folder, and ntdll then resolves its real path back to the build tree.
+ln -sfn "$wine_unix/ntdll.so" "$loader_macos/ntdll.so"
+ln "$WINELOADER" "$loader_macos/wine" 2>/dev/null || cp -p "$WINELOADER" "$loader_macos/wine"
 if [ -x "$loader_macos/wine" ]; then
   WINELOADER="$loader_macos/wine"
   echo "loader staged in bundle for game mode" >> "$log" 2>&1 || true
@@ -1279,6 +1437,9 @@ cat > "$loader_macos/launcher" <<LAUNCHER
 export WINELOADER="$WINELOADER"
 wine_log="$loader_root/notproton-wine.log"
 exec > "\$wine_log" 2>&1
+# The system shell drops DYLD_ variables on the way in, so the library path travels
+# under another name.
+[ -z "\$NOTPROTON_DYLD_FALLBACK" ] || export DYLD_FALLBACK_LIBRARY_PATH="\$NOTPROTON_DYLD_FALLBACK"
 shim="$HOME/Library/Application Support/notproton/overlay-shim.dylib"
 if [ -n "\$STEAM_DYLD_INSERT_LIBRARIES" ]; then
   if [ -f "\$shim" ]; then
@@ -1355,14 +1516,15 @@ else
   echo "=== client staged no overlay renderer, overlay disabled ===" >> "$log" 2>&1 || true
 fi
 set -- --args "$shim_exe" "$@"
-for name in $(env | sed -nE 's/^(Steam[A-Za-z0-9]*|(CX_GRAPHICS|D3DM_|DXMT_|DXVK_|MTL_|ROSETTA_)[A-Z0-9_]*)=.*/\1/p'); do
+for name in $(env | sed -nE 's/^(Steam[A-Za-z0-9]*|FONTCONFIG_PATH|(CX_GRAPHICS|CX_APPLEGPT|MNC_|WINE_MAC_|GST_|D3DM_|DXMT_|DXVK_|MTL_|ROSETTA_)[A-Z0-9_]*)=.*/\1/p'); do
   eval "value=\$$name"
   # shellcheck disable=SC2154 # eval assigns value on the line above
   set -- --env "$name=$value" "$@"
 done
 set -- \
-  --env CX_ROOT="$CX_ROOT" \
-  --env CX_HOME="$CX_HOME" \
+  --env USER="$USER" \
+  --env LOGNAME="$LOGNAME" \
+  --env NOTPROTON_DYLD_FALLBACK="$DYLD_FALLBACK_LIBRARY_PATH" \
   --env WINESERVER="$WINESERVER" \
   --env WINEDLLPATH="$WINEDLLPATH" \
   --env WINEDLLOVERRIDES="$WINEDLLOVERRIDES" \

@@ -88,14 +88,15 @@ struct PayloadInspectionTests {
             try Data().write(to: file)
         }
 
-        let fex = try #require(SupportedRunners.all.first { $0.flavor == "fex" })
-        let state = PayloadInspector.inspect(bridge: bridge, builds: [fex])
+        // MnC Wine patches the x86_64 and i386 ntdll, so the aarch64 slot is not expected.
+        let build = SupportedRunners.all[0]
+        let state = PayloadInspector.inspect(bridge: bridge, builds: [build])
         #expect(state.manifestProblem == nil)
-        #expect(state.expected == 20)
+        #expect(state.expected == 19)
         #expect(state.present == 10)
         #expect(state.missing(origin: .valve).isEmpty)
         #expect(state.missing(origin: .built).count == 7)
-        #expect(state.missing(origin: .patched).count == 3)
+        #expect(state.missing(origin: .patched).count == 2)
         #expect(!state.isComplete)
     }
 }

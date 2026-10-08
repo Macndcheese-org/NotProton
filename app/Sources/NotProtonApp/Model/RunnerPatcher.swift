@@ -17,12 +17,9 @@ enum RunnerPatcher {
         windowsBuiltins + unixArches(in: root).map { (arch: $0, name: "lsteamclient.so") }
     }
 
+    // MnC Wine is an x86_64 build that runs under Rosetta, so there is one unix side.
     static func unixArches(in root: URL) -> [String] {
-        let arches = unixLoaders(in: root).compactMap { loader in
-            loader.pathComponents.last { $0.hasSuffix("-unix") }
-        }
-        let present = ["aarch64-unix", "x86_64-unix"].filter { arches.contains($0) }
-        return present.isEmpty ? ["x86_64-unix"] : present
+        ["x86_64-unix"]
     }
 
     static func unixArch(in root: URL) -> String {
@@ -53,7 +50,7 @@ enum RunnerPatcher {
         var wrong: [String] = []
         for arch in WineArch.allCases {
             guard let expected = build.patchedNtdll[arch] else { continue }
-            let live = root.appending(path: "lib/wine/\(arch.rawValue)/ntdll.dll")
+            let live = RunnerLayout.ntdll(in: root, arch: arch)
             guard let actual = Digest.sha256IfPresent(live) else {
                 wrong.append("\(arch.rawValue)/ntdll.dll is missing")
                 continue
@@ -64,7 +61,7 @@ enum RunnerPatcher {
         }
         for builtin in builtins(in: root) {
             let installed = Digest.sha256IfPresent(
-                root.appending(path: "lib/wine/\(builtin.arch)/\(builtin.name)"))
+                RunnerLayout.builtin(in: root, arch: builtin.arch, name: builtin.name))
             guard let installed else {
                 wrong.append("\(builtin.arch)/\(builtin.name) is missing")
                 continue
@@ -107,7 +104,7 @@ enum RunnerPatcher {
                 )
             }
 
-            let live = root.appending(path: "lib/wine/\(arch.rawValue)/ntdll.dll")
+            let live = RunnerLayout.ntdll(in: root, arch: arch)
             if Digest.sha256IfPresent(live) == expected { continue }
 
             try keepClean(live)
@@ -131,7 +128,7 @@ enum RunnerPatcher {
                 )
             }
 
-            let destination = root.appending(path: "lib/wine/\(builtin.arch)/\(builtin.name)")
+            let destination = RunnerLayout.builtin(in: root, arch: builtin.arch, name: builtin.name)
             if Digest.sha256IfPresent(source) == Digest.sha256IfPresent(destination) { continue }
 
             try atomicReplace(destination, with: Data(contentsOf: source), step: step)
@@ -170,23 +167,14 @@ enum RunnerPatcher {
     }
 
     static func unixLoaders(in root: URL) -> [URL] {
-        let fm = FileManager.default
-        let wine = root.appending(path: "lib/wine")
-        let entries = (try? fm.contentsOfDirectory(at: wine, includingPropertiesForKeys: nil)) ?? []
-
-        return entries
-            .filter { $0.lastPathComponent.hasSuffix("-unix") }
-            .flatMap { [$0.appending(path: "wine"), $0.appending(path: "wine.app/Contents/MacOS/wine")] }
-            .filter { fm.fileExists(atPath: $0.path(percentEncoded: false)) }
-            .sorted { $0.path < $1.path }
+        let loader = RunnerLayout.loader(in: root)
+        return FileManager.default.fileExists(atPath: loader.path(percentEncoded: false)) ? [loader] : []
     }
 
     static func name(of loader: URL) -> String {
         let parts = loader.pathComponents
-        guard let arch = parts.lastIndex(where: { $0.hasSuffix("-unix") }) else {
-            return loader.lastPathComponent
-        }
-        return parts[arch...].joined(separator: "/")
+        guard parts.count > 1 else { return loader.lastPathComponent }
+        return parts.suffix(2).joined(separator: "/")
     }
 
     private static func entitlements(of loader: URL) -> String? {

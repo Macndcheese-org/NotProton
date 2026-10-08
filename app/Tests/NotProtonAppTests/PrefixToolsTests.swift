@@ -33,78 +33,48 @@ struct PrefixToolsTests {
         // reads under different rules, and nothing else would notice the drift.
         let source = try Self.compatSource()
 
-        // Written in compat_run.sh as: export WINELOADER="$CX_ROOT/lib/wine/..."
-        func exported(_ name: String) throws -> String {
-            let pattern = #"export \#(name)="([^"]*)""#
-            let regex = try Regex(pattern)
+        // Written in compat_run.sh as: WINELOADER="$MNC_ROOT/loader/wine"
+        func assigned(_ name: String) throws -> String {
+            let regex = try Regex(#"(?m)^\#(name)="([^"]*)""#)
             let match = try #require(
-                source.firstMatch(of: regex), "compat_run.sh no longer exports \(name)")
+                source.firstMatch(of: regex), "compat_run.sh no longer sets \(name)")
             return String(match[1].substring ?? "")
         }
 
-        let home = try exported("CX_HOME").replacingOccurrences(
-            of: "$HOME", with: SupportPaths.home.path(percentEncoded: false))
-
-        // Both sides resolve the loader and wineserver from whichever unix directory the runner
-        // has, so the check is that they pick the same pair for the same tree.
-        let fm = FileManager.default
-        for (arch, loaderTail, serverName) in [
-            ("aarch64-unix", "wine.app/Contents/MacOS/wine", "wineserver-arm64"),
-            ("x86_64-unix", "wine", "wineserver-x86"),
-        ] {
-            let runner = URL(filePath: NSTemporaryDirectory())
-                .appending(path: "notproton-layout-\(UUID().uuidString)")
-            defer { try? fm.removeItem(at: runner) }
-
-            for path in ["lib/wine/\(arch)/\(loaderTail)", "bin/\(serverName)"] {
-                let file = runner.appending(path: path)
-                try fm.createDirectory(
-                    at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try Data().write(to: file)
-                try fm.setAttributes(
-                    [.posixPermissions: 0o755], ofItemAtPath: file.path(percentEncoded: false))
-            }
-
-            let layout = PrefixTools.layout(runner: runner)
-            #expect(layout.loader == runner.appending(path: "lib/wine/\(arch)/\(loaderTail)"))
-            #expect(layout.server == runner.appending(path: "bin/\(serverName)"))
-
-            // The shapes the script reaches for, which is what would drift independently.
-            #expect(source.contains("$wine_unix/\(loaderTail)"))
-            #expect(source.contains(serverName))
-
-            let environment = PrefixTools.environment(prefix: samplePrefix(), runner: runner)
-            let dllPath = try exported("WINEDLLPATH")
-                .replacingOccurrences(of: "${WINEDLLPATH:+:$WINEDLLPATH}", with: "")
-                .replacingOccurrences(of: "$CX_ROOT", with: runner.path(percentEncoded: false))
-                .replacingOccurrences(of: "$wine_unix", with: layout.unixDir.path(percentEncoded: false))
-
-            #expect(environment["WINEDLLPATH"] == dllPath, "WINEDLLPATH drifted from RUN_SCRIPT")
-            #expect(environment["WINELOADER"] == layout.loader.path(percentEncoded: false))
-            #expect(environment["WINESERVER"] == layout.server.path(percentEncoded: false))
-            #expect(environment["CX_HOME"] == home)
-
-            // WINELOADER is what launch and recreate actually invoke, so the two have to
-            // agree with each other as well as with the script.
-            #expect(environment["WINELOADER"]
-                == PrefixTools.loader(runner: runner).path(percentEncoded: false))
+        let runner = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "notproton-layout-\(UUID().uuidString)")
+        let root = runner.path(percentEncoded: false)
+        func resolved(_ name: String) throws -> String {
+            try assigned(name).replacingOccurrences(of: "$MNC_ROOT", with: root)
         }
+
+        let layout = PrefixTools.layout(runner: runner)
+        #expect(layout.loader.path(percentEncoded: false) == (try resolved("WINELOADER")))
+        #expect(layout.server.path(percentEncoded: false) == (try resolved("WINESERVER")))
+        #expect(layout.unixDir.path(percentEncoded: false) == (try resolved("wine_unix")))
+        #expect(try assigned("MNC_ROOT").hasSuffix("/runners/mnc-$np_build/wine"))
+
+        let environment = PrefixTools.environment(prefix: samplePrefix(), runner: runner)
+        #expect(environment["WINEDLLPATH"] == nil, "a build tree resolves its own builtins")
+        #expect(environment["WINELOADER"] == layout.loader.path(percentEncoded: false))
+        #expect(environment["WINESERVER"] == layout.server.path(percentEncoded: false))
+        #expect(environment["DYLD_FALLBACK_LIBRARY_PATH"]?.contains("/usr/local/opt/freetype/lib") == true)
+
+        // WINELOADER is what launch and recreate actually invoke, so the two have to
+        // agree with each other as well as with the script.
+        #expect(environment["WINELOADER"]
+            == PrefixTools.loader(runner: runner).path(percentEncoded: false))
     }
 
     @Test("The prefix and the sync backend are set, and the game only variables are not")
     func setsPrefixAndBackend() {
         let prefix = samplePrefix()
-        let runner = SupportPaths.clonedRoot(forBuild: "27.0.0.40921-fex")
+        let runner = SupportPaths.clonedRoot(forBuild: SupportedRunners.all[0].id)
         let environment = PrefixTools.environment(prefix: prefix, runner: runner)
 
         #expect(environment["WINEPREFIX"] == prefix.pfx.path(percentEncoded: false))
         #expect(environment["WINEPREFIX"]?.hasSuffix("/compatdata/1574480/pfx") == true)
         #expect(environment["WINEMSYNC"] == PrefixTools.syncBackend(prefix: prefix))
-        // Derived rather than spelled out, because the support directory hangs off the
-        // running account's home and a literal here would only ever pass on one machine.
-        let runnerBin = runner.appending(path: "bin")
-            .path(percentEncoded: false)
-        #expect(environment["PATH"]?.hasPrefix(runnerBin + ":") == true)
 
         // Redirecting steamclient to lsteamclient means something for a game, not for a
         // configuration window, where it would apply game override rules to what it touches.
@@ -208,16 +178,15 @@ struct PrefixToolsTests {
     func archRuleMatchesRunScript() throws {
         let source = try Self.compatSource()
 
-        // Written in compat.c as: aarch64-unix) want=aa64 ;;
+        // Written in compat_run.sh as: want=8664
         func wanted(_ pattern: String) throws -> PrefixArch? {
             let match = try #require(
-                source.firstMatch(of: try Regex(pattern)), "compat.c no longer sets \(pattern)")
+                source.firstMatch(of: try Regex(pattern)), "compat_run.sh no longer sets \(pattern)")
             let word = try #require(UInt16(String(match[1].substring ?? ""), radix: 16))
             return PrefixArch(machine: word)
         }
 
-        #expect(try wanted(#"aarch64-unix\) want=(\w+)"#) == .arm64)
-        #expect(try wanted(#"\*\) want=(\w+)"#) == .x86_64)
+        #expect(try wanted(#"(?m)^  want=(\w+)$"#) == .x86_64)
 
         // And both read it out of the same file.
         #expect(source.contains(#"drive_c/windows/system32/ntdll.dll"#))
@@ -229,7 +198,7 @@ struct PrefixToolsTests {
     func dialogNamesBothBuilds() throws {
         let source = try Self.compatSource()
 
-        // Written in compat_run.sh as: aa64) printf 'the FEX build of CrossOver' ;;
+        // Written in compat_run.sh as: 8664) printf 'MnC Wine' ;;
         func name(of word: String) throws -> String {
             let match = try #require(
                 source.firstMatch(of: try Regex("\(word)\\) printf '([^']+)'")),
@@ -243,13 +212,13 @@ struct PrefixToolsTests {
             return String(match[1].substring ?? "")
         }
 
-        #expect(try name(of: wanted(#"aarch64-unix\) want=(\w+)"#)).contains("FEX"))
-        #expect(try name(of: wanted(#"\*\) want=(\w+)"#)).contains("Rosetta"))
+        #expect(try name(of: wanted(#"(?m)^  want=(\w+)$"#)) == "MnC Wine")
+        #expect(try name(of: "aa64").contains("ARM64"))
 
         // A prefix that reads as 32 bit is neither build, so it gets no build name.
         let fallback = try #require(source.firstMatch(of: /\*\) printf '([^']+)'/))
         let vague = String(fallback.1)
-        #expect(!vague.contains("FEX") && !vague.contains("Rosetta"))
+        #expect(!vague.contains("MnC") && !vague.contains("ARM64"))
 
         // What made the prefix is named first and blamed, what is installed second.
         let built = try #require(source.range(of: #"$(tool_name "$have")"#))
@@ -290,24 +259,14 @@ struct PrefixToolsTests {
         }
     }
 
-    @Test("The Rosetta flavor takes the x86_64 tree on a runner that has both")
-    func rosettaFlavorTakesX86() throws {
-        let fm = FileManager.default
-        let runner = fm.temporaryDirectory.appending(path: "np-arch-\(UUID().uuidString)")
-        defer { try? fm.removeItem(at: runner) }
-        for path in [
-            "lib/wine/aarch64-unix/wine.app/Contents/MacOS/wine", "lib/wine/x86_64-unix/wine",
-            "bin/wineserver-arm64", "bin/wineserver",
-        ] {
-            let file = runner.appending(path: path)
-            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: file)
-            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path(percentEncoded: false))
+    @Test("Every flavor resolves to the build tree's loader and server")
+    func everyFlavorTakesTheTree() {
+        let runner = URL(filePath: "/R/mnc-11.18-aaaaaaaa/wine")
+        for flavor in CompatTool.Flavor.allCases {
+            let layout = PrefixTools.layout(runner: runner, flavor: flavor)
+            #expect(layout.loader == RunnerLayout.loader(in: runner))
+            #expect(layout.server == RunnerLayout.wineserver(in: runner))
         }
-
-        #expect(PrefixTools.layout(runner: runner, flavor: .fex).unixDir.lastPathComponent == "aarch64-unix")
-        #expect(PrefixTools.layout(runner: runner, flavor: .rosetta).unixDir.lastPathComponent == "x86_64-unix")
-        #expect(PrefixTools.layout(runner: runner, flavor: .rosetta).server.lastPathComponent == "wineserver")
     }
 
     // Stands in for wineboot --init, the one part of a rebuild a test cannot run: the windows
@@ -316,7 +275,7 @@ struct PrefixToolsTests {
         in dir: URL, home: URL, exit status: Int = 0, lock: Bool = false, extra: String = ":"
     ) throws -> URL {
         let runner = dir.appending(path: "runner")
-        let loader = runner.appending(path: "lib/wine/x86_64-unix/wine")
+        let loader = RunnerLayout.loader(in: runner)
         try FileManager.default.createDirectory(
             at: loader.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("""
@@ -1048,8 +1007,8 @@ struct PrefixToolsTests {
     func profileLinkPointsInward() throws {
         let source = try Self.compatSource()
 
-        // CrossOver fixes the profile name, so crossover is the link and steamuser is
-        // the real directory holding the files Steam syncs.
+        // Prefixes from the CrossOver days hold a crossover profile, so crossover is the link
+        // and steamuser is the real directory holding the files Steam syncs.
         #expect(source.contains(#"ln -s steamuser "$users/crossover""#))
         // The reverse direction is what routed cloud saves out to the mac home.
         #expect(!source.contains(#"ln -s "$profile" "$users/steamuser""#))
@@ -1353,8 +1312,8 @@ struct PrefixToolsTests {
 @Suite("Which build last ran a prefix")
 struct PrefixLastBuildTests {
 
-    private static let release = "26.3.0.39832"
-    private static let preview = "27.0.0.40921-fex"
+    private static let release = SupportedRunners.all[0].id
+    private static let preview = "11.19-bbbbbbbb"
 
     private func makeWorld() throws -> (dir: URL, runners: URL, prefix: WinePrefix) {
         let fm = FileManager.default
@@ -1362,7 +1321,7 @@ struct PrefixLastBuildTests {
         let runners = dir.appending(path: "runners")
         for (build, time) in [(Self.release, 1_784_112_240), (Self.preview, 1_787_334_674)] {
             let inf = SupportPaths.clonedRoot(forBuild: build, runners: runners)
-                .appending(path: "share/wine/wine.inf")
+                .appending(path: "loader/wine.inf")
             try fm.createDirectory(at: inf.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data().write(to: inf)
             try fm.setAttributes(
@@ -1409,10 +1368,10 @@ struct PrefixLastBuildTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         try updated(prefix, "1787334674\n")
-        try "\(Self.release)\nCrossOver 26.3\n".write(
+        try "\(Self.release)\nMnC Wine 11.18\n".write(
             to: prefix.root.appending(path: PrefixTools.buildRecordName), atomically: true, encoding: .utf8)
         #expect(PrefixTools.lastBuild(of: prefix, runners: runners)
-            == PrefixBuildRecord(build: Self.release, display: "CrossOver 26.3"))
+            == PrefixBuildRecord(build: Self.release, display: "MnC Wine 11.18"))
     }
 
     @Test("A tool of the other arch is never picked for a prefix")
@@ -1425,20 +1384,21 @@ struct PrefixLastBuildTests {
         header[0x3c] = 0x40
         try Data(header + [0x50, 0x45, 0, 0, 0x64, 0x86])
             .write(to: system32.appending(path: "ntdll.dll"))
-        try "\(Self.preview)\nCrossOver Preview (Rosetta)\n".write(
+        try "\(Self.preview)\nMnC Wine 11.19\n".write(
             to: prefix.root.appending(path: PrefixTools.buildRecordName), atomically: true, encoding: .utf8)
 
         let fexOnly = [InstalledTool(
-            tool: CompatTool(name: "notproton", flavor: .fex, display: "CrossOver Preview (FEX)"),
+            tool: CompatTool(name: "notproton-arm", flavor: .fex, display: "MnC Wine 11.19 ARM64"),
             build: Self.preview)]
         #expect(PrefixTools.tool(for: prefix, among: fexOnly, runners: runners) == nil)
 
-        let fex = try #require(SupportedRunners.all.first { $0.id == Self.preview })
-        let both = SupportedRunners.tools(for: [fex])
-        #expect(PrefixTools.tool(for: prefix, among: both, runners: runners)?.name == "notproton-fex-rosetta")
+        let both = fexOnly + [InstalledTool(
+            tool: CompatTool(name: "notproton-mnc-next", flavor: .rosetta, display: "MnC Wine 11.19"),
+            build: Self.preview)]
+        #expect(PrefixTools.tool(for: prefix, among: both, runners: runners)?.name == "notproton-mnc-next")
     }
 
-    @Test("A prefix another CrossOver updated gets no tool, so nothing runs over it")
+    @Test("A prefix another Wine build updated gets no tool, so nothing runs over it")
     func noToolForAnotherWine() throws {
         let (dir, runners, prefix) = try makeWorld()
         defer { try? FileManager.default.removeItem(at: dir) }

@@ -71,9 +71,9 @@ for (const form of Object.keys(FORMS)) {
   // The value is the name wine gives the library, which is lower case, and the label is
   // the name in a list of four the reader picks from.
   const backends = nodes('').find(x => x.type === 'Dropdown').props.rgOptions;
-  t.ok(backends.map(o => o.label).join(',') === 'Automatic,D3DMetal,DXMT,DXVK,WineD3D',
+  t.ok(backends.map(o => o.label).join(',') === 'Automatic (D3DMetal),D3DMetal (GPTK),DXMT,OpenGL (WineD3D)',
        `the backends name themselves (${backends.map(o => o.label).join(',')})`);
-  t.ok(backends.map(o => o.data).join(',') === ',d3dmetal,dxmt,dxvk,wined3d',
+  t.ok(backends.map(o => o.data).join(',') === ',d3dmetal,dxmt,wined3d',
        'the backend values stay as the tool reads them');
 
   const root = P({ details: details('') });

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Development tool. The real patcher lives in the app (NtdllPatcher.swift).
 # This is the original Python version, kept for validating patches against
-# new CrossOver builds.
+# new Wine builds.
 import hashlib
 import os
 import sys
@@ -23,6 +23,8 @@ PAYLOAD_BY_CLEAN_SHA = {
     "1b02dcf6ad9d9490870f1127a421c4c0d1471c65ec1574e1e84c05d69801ac7e": "detour2-fex-41069.bin",
     "66b1a244a611795c59a93a9491d17f36c98cd8db9be495004a37864e0e5ed4a5": "detour32-fex-41069.bin",
     "77ca83b2e1a3a1242f9d2d8868328262b2bcfc3f59bacf8b9389ea7e797ea852": "detour64-fex-41069.bin",
+    "3b3b3cc1359682555013d58c95d483f8d11a6485040ddfe3b9ea0bfdb1a6e1c7": "detour2-mnc.bin",
+    "85755ffc284d2c7e2ab4695794004d1a7437bbd8b12d9455813004bb87b2943e": "detour32-mnc.bin",
 }
 
 KNOWN_MACHINES = (0x8664, 0x14c, 0xaa64)

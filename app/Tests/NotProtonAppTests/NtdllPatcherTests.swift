@@ -4,7 +4,7 @@ import Testing
 @testable import NotProtonApp
 
 // A stand-in PE with one file-backed section and one with nothing behind it, so the section
-// walk and every refusal run without CrossOver. Deliberately not an identity mapping.
+// walk and every refusal run without a Wine build. Deliberately not an identity mapping.
 private struct StubPE {
     static let peOffset = 0x80
     static let sectionVirtualAddress = 0x1000
@@ -323,33 +323,41 @@ struct NtdllPatcherTests {
     // MARK: - Against the real thing
 
     // The point of the port: the same input has to come out as the bytes apply.py and
-    // apply32.py produced, which SupportedRunners records. Needs an unpatched CrossOver.
-    @Test("Patching the unpatched ntdll reproduces the recorded hashes",
-          arguments: ["CrossOver Preview", "CrossOver"])
-    func realNtdllReproducesRecordedHashes(app: String) throws {
-        let root = URL(filePath: "/Applications/\(app).app/Contents/SharedSupport/CrossOver")
-        guard FileManager.default.fileExists(atPath: root.path(percentEncoded: false)),
-              let installed = Digest.sha256IfPresent(CrossOverSource.unixLoader(inRoot: root)),
-              let build = SupportedRunners.build(loaderSHA256: installed)
-        else { return }
+    // apply32.py produced, which SupportedRunners records. Needs an unpacked MnC Wine tree,
+    // either installed or named by NOTPROTON_MNC_ROOT.
+    static var realRoots: [URL] {
+        var roots = SupportedRunners.all.map { SupportPaths.clonedRoot(forBuild: $0.id) }
+        if let named = ProcessInfo.processInfo.environment["NOTPROTON_MNC_ROOT"] {
+            roots.insert(URL(filePath: named), at: 0)
+        }
+        return roots
+    }
 
-        var reproduced: [WineArch] = []
-        for patch in NtdllPatcher.patches(for: build) {
-            let source = NtdllPatcher.cleanSource(inRoot: root, arch: patch.arch)
-            guard let hash = Digest.sha256IfPresent(source), hash == build.cleanNtdll[patch.arch] else {
-                continue
+    @Test("Patching the unpatched ntdll reproduces the recorded hashes")
+    func realNtdllReproducesRecordedHashes() throws {
+        for root in Self.realRoots {
+            guard let installed = Digest.sha256IfPresent(Clean.copy(of: MncWineSource.unixLoader(inRoot: root))),
+                  let build = SupportedRunners.build(loaderSHA256: installed)
+            else { continue }
+
+            var reproduced: [WineArch] = []
+            for patch in NtdllPatcher.patches(for: build) {
+                let source = NtdllPatcher.cleanSource(inRoot: root, arch: patch.arch)
+                guard let hash = Digest.sha256IfPresent(source), hash == build.cleanNtdll[patch.arch] else {
+                    continue
+                }
+
+                let patched = try NtdllPatcher.apply(
+                    patch, to: try Data(contentsOf: source), payload: try NtdllPatcher.payload(for: patch)
+                )
+                #expect(Digest.sha256(of: patched) == build.patchedNtdll[patch.arch])
+                reproduced.append(patch.arch)
             }
 
-            let patched = try NtdllPatcher.apply(
-                patch, to: try Data(contentsOf: source), payload: try NtdllPatcher.payload(for: patch)
-            )
-            #expect(Digest.sha256(of: patched) == build.patchedNtdll[patch.arch])
-            reproduced.append(patch.arch)
+            // The tree was identified by its loader, so every arch with a clean hash is present
+            // and a run that reproduced fewer skipped rather than passed.
+            #expect(reproduced.count == build.cleanNtdll.count)
         }
-
-        // The bundle was identified by its loader, so every arch with a clean hash is present
-        // and a run that reproduced fewer skipped rather than passed.
-        #expect(reproduced.count == build.cleanNtdll.count)
     }
 
     // Every supported build, not whichever is installed. Refusal runs on synthetic bytes, so
@@ -397,9 +405,7 @@ struct NtdllPatcherTests {
     // to be byte identical. A clean ntdll cannot be a fixture, so no runner means skip.
     private static func cleanRunnerRoot(for build: RunnerBuild) -> URL? {
         let root = SupportPaths.clonedRoot(forBuild: build.id)
-        guard FileManager.default.fileExists(
-            atPath: root.appending(path: "lib/wine").path(percentEncoded: false)
-        ) else { return nil }
+        guard RunnerInstaller.hasClone(forBuild: build.id) else { return nil }
 
         for patch in NtdllPatcher.patches(for: build) {
             let source = NtdllPatcher.cleanSource(inRoot: root, arch: patch.arch)
@@ -469,7 +475,7 @@ struct NtdllPatcherTests {
     @Test("The clean source prefers the one time backup over a live file")
     func cleanSourcePrefersBackup() throws {
         let root = URL(filePath: NSTemporaryDirectory()).appending(path: "notproton-root-\(UUID().uuidString)")
-        let directory = root.appending(path: "lib/wine/x86_64-windows")
+        let directory = root.appending(path: "dlls/ntdll/x86_64-windows")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -494,7 +500,7 @@ struct NtdllStagingTests {
 
         var hashes: [WineArch: String] = [:]
         for arch in WineArch.allCases {
-            let directory = bridge.appending(path: "wine/27.0.0.40921/\(arch.rawValue)")
+            let directory = bridge.appending(path: "wine/\(SupportedRunners.all[0].id)/\(arch.rawValue)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let file = directory.appending(path: "ntdll.dll")
             try Data("staged \(arch.rawValue)".utf8).write(to: file)
@@ -502,8 +508,8 @@ struct NtdllStagingTests {
         }
 
         let build = RunnerBuild(
-            bundleVersion: "27.0.0.40921",
-            releaseVersion: "20260821",
+            bundleVersion: SupportedRunners.all[0].id,
+            releaseVersion: "11.18",
             flavor: nil,
             loaderSHA256: "unused",
             cleanNtdll: [:],

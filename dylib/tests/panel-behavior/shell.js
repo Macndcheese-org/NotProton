@@ -55,7 +55,7 @@ function view(form, options) {
   const toggles = {};
   nodes.filter(n => n.type === 'Toggle' && n.props.label in TOGGLES)
        .forEach(n => { toggles[TOGGLES[n.props.label]] = n; });
-  const backend = nodes.find(n => n.type === 'Dropdown' && n.props.rgOptions.some(o => o.data === 'dxvk'));
+  const backend = nodes.find(n => n.type === 'Dropdown' && n.props.rgOptions.some(o => o.data === 'dxmt'));
   const upscale = nodes.find(n => n.type === 'Dropdown' && n.props.rgOptions.some(o => o.data === '1.5'));
   return { toggles, backend, upscale, written: P.written };
 }
